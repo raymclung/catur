@@ -1,5 +1,7 @@
 # Chess GM Database
 
+[![tes](https://github.com/raymclung/catur/actions/workflows/tes.yml/badge.svg)](https://github.com/raymclung/catur/actions/workflows/tes.yml)
+
 > A personal chess study app: a database of grandmaster games, engine analysis
 > with Stockfish, and training built from my own losses.
 > Python · FastAPI · SQLite · vanilla HTML/JS. Documentation and code are in
