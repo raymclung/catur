@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Papan Analisis — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/vendor/chessboard.min.css">
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html" class="aktif">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="papan-tata">
+
+    <div>
+      <div class="papan-baris">
+        <div class="eval-bar" id="eval-bar" title="Evaluasi engine, sudut pandang Putih">
+          <div class="eval-bar-putih" id="eval-bar-isi" style="height:50%"></div>
+          <span class="eval-bar-angka bawah" id="eval-angka">—</span>
+        </div>
+        <div id="papan"></div>
+      </div>
+
+      <div class="alat">
+        <div class="segmen" role="radiogroup" aria-label="Mode papan">
+          <input type="radio" name="mode" id="mode-main" value="main" checked>
+          <label for="mode-main" title="Hanya langkah sah">Main</label>
+          <input type="radio" name="mode" id="mode-susun" value="susun">
+          <label for="mode-susun" title="Taruh dan buang bidak bebas; seret dari cadangan, seret keluar papan untuk membuang">Susun</label>
+        </div>
+        <span class="status-posisi" id="status-posisi"></span>
+        <div class="ikon-tombol">
+          <button id="undo"      title="Batalkan langkah (←)">↶</button>
+          <button id="awal"      title="Posisi awal">⟲</button>
+          <button id="kosongkan" title="Kosongkan papan">✕</button>
+          <button id="balik"     title="Balik papan (F)">⇅</button>
+          <button id="simpan-posisi" class="tombol-simpan" data-asal="analisis"
+                title="Simpan posisi ini supaya bisa dibuka lagi dari tab Tersimpan" hidden>☆ Simpan</button>
+        </div>
+      </div>
+
+      <div class="alat susun" id="kotak-susun" hidden>
+        <label>Giliran
+          <select id="giliran">
+            <option value="w">Putih</option>
+            <option value="b">Hitam</option>
+          </select>
+        </label>
+        <span class="pisah"></span>
+        <span class="label-mini" title="Hak rokade yang masih ada">Rokade</span>
+        <label class="centang"><input type="checkbox" id="rokade-K" checked> K</label>
+        <label class="centang"><input type="checkbox" id="rokade-Q" checked> Q</label>
+        <label class="centang"><input type="checkbox" id="rokade-k" checked> k</label>
+        <label class="centang"><input type="checkbox" id="rokade-q" checked> q</label>
+      </div>
+
+      <div class="fen-baris">
+        <input id="fen" type="text" spellcheck="false" aria-label="FEN" placeholder="FEN" title="Tempel FEN lalu Enter">
+        <button id="terapkan" title="Terapkan FEN (Enter)">Terapkan</button>
+        <button id="salin" title="Salin FEN">Salin</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="kartu">
+        <div class="engine-kepala">
+          <div>
+            <div class="engine-skor" id="engine-skor" title="Sudut pandang Putih">—</div>
+            <div class="engine-meta" id="engine-meta">Stockfish</div>
+          </div>
+          <button id="analisa" class="utama" title="Evaluasi posisi (spasi)">Analisa</button>
+        </div>
+        <div class="engine-atur">
+          <label class="centang" title="Evaluasi ulang setiap posisi berubah"><input type="checkbox" id="otomatis" checked> Otomatis</label>
+          <label>Garis
+            <select id="multipv">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <label>Depth
+            <select id="depth" title="auto = mengikuti profil RAM server">
+              <option value="">auto</option>
+              <option value="12">12</option>
+              <option value="16">16</option>
+              <option value="20">20</option>
+              <option value="24">24</option>
+            </select>
+          </label>
+        </div>
+        <div class="engine-status" id="status-engine"></div>
+      </div>
+
+      <div class="kartu" style="margin-top:16px">
+        <div id="garis" title="Klik langkah untuk memainkannya"><div class="pesan kecil">—</div></div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="/static/vendor/jquery.min.js"></script>
+<script src="/static/vendor/chessboard.min.js"></script>
+<script src="/static/vendor/chess.js"></script>
+<script src="/static/klik-papan.js"></script>
+<script src="/static/analisis.js"></script>
+<script src="/static/simpan-posisi.js"></script>
+</body>
+</html>

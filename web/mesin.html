@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mesin — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" class="aktif" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="kartu">
+    <h2 class="judul-kartu">Kemajuan analisis
+      <span class="kanan kecil redup" id="jam"></span>
+    </h2>
+    <div class="mesin-isi">
+      <div class="angka-strip" id="angka-analisis">
+        <div><div class="angka-besar">—</div><div class="label">memuat…</div></div>
+      </div>
+      <div class="kemajuan kemajuan-tebal"><div class="kemajuan-isi" id="bar-analisis" style="width:0"></div></div>
+      <div class="kecil redup" id="catatan-kemajuan"></div>
+    </div>
+  </div>
+
+  <div class="papan-tata" style="margin-top:16px; grid-template-columns: minmax(320px, 1fr) 1fr">
+
+    <div class="kartu">
+      <h2 class="judul-kartu">Pilih partai</h2>
+      <p class="kecil redup sub-kartu">
+        Stockfish menilai tiap langkah; hasilnya dipakai halaman Kekalahan,
+        Kelemahan, dan Latihan. Partai yang baru diimpor <strong>tidak</strong>
+        dianalisis otomatis — pilih di sini dulu.
+      </p>
+
+      <div class="mesin-isi">
+        <div class="segmen" role="radiogroup" aria-label="Partai yang dianalisis">
+          <input type="radio" name="kelompok" id="kel-saya" value="saya" checked>
+          <label for="kel-saya" title="Partai Ray sendiri dari Lichess dan Chess.com">Partai saya</label>
+          <input type="radio" name="kelompok" id="kel-gm" value="gm">
+          <label for="kel-gm" title="Partai GM dari TWIC, PGN Mentor, dan broadcast">Partai GM</label>
+          <input type="radio" name="kelompok" id="kel-id" value="id">
+          <label for="kel-id" title="Nomor partai tertentu">Nomor partai</label>
+        </div>
+
+        <div class="baris-isi" id="bagian-saya">
+          <label>Hasil
+            <select id="hasil">
+              <option value="kalah" selected>kalah</option>
+              <option value="menang">menang</option>
+              <option value="remis">remis</option>
+              <option value="">semua</option>
+            </select>
+          </label>
+          <label>Format
+            <select id="format">
+              <option value="">semua</option>
+              <option value="bullet">bullet</option>
+              <option value="blitz">blitz</option>
+              <option value="rapid">rapid</option>
+              <option value="klasik">klasik</option>
+            </select>
+          </label>
+          <label>Rating lawan minimal
+            <input type="text" id="lawan-min-elo" value="2201" size="5" inputmode="numeric">
+          </label>
+        </div>
+
+        <div class="baris-isi" id="bagian-gm" hidden>
+          <label>Sumber
+            <select id="sumber">
+              <option value="">semua sumber GM</option>
+            </select>
+          </label>
+          <label>Pemain
+            <select id="pemain">
+              <option value="">semua pemain</option>
+            </select>
+          </label>
+          <label id="bungkus-pemain-ketik" hidden>Nama pemain
+            <input type="text" id="pemain-ketik" size="14" placeholder="Carlsen" spellcheck="false">
+          </label>
+          <label title="Kosongkan kalau tidak mau disaring rating. Partai yang tidak punya tag Elo (banyak partai lama dari PGN Mentor) ikut terbuang begitu kotak ini diisi.">Elo kedua pemain minimal
+            <input type="text" id="min-elo" size="5" inputmode="numeric" placeholder="kosong = semua">
+            <span class="kecil redup">kalau diisi, partai tanpa tag Elo ikut terbuang</span>
+          </label>
+          <label class="datar" title="English Opening, Catalan, Ragozin, Sicilian — lihat app/eco.py">
+            <input type="checkbox" id="repertoire"> hanya pembukaan repertoire saya
+          </label>
+        </div>
+
+        <div class="baris-isi" id="bagian-id" hidden>
+          <label style="flex:1">Nomor partai (pisahkan dengan spasi)
+            <input type="text" id="id-partai" style="width:100%" placeholder="11669 11657" spellcheck="false">
+            <span class="kecil redup">
+              Untuk menganalisis partai tertentu yang sudah kamu buka. Nomornya ada
+              di alamat halaman partai — <code>/partai/<strong>11669</strong></code> —
+              dan di kolom paling kiri daftar "Lihat dulu".
+            </span>
+          </label>
+        </div>
+
+        <div class="baris-isi baris-pisah">
+          <label>Jumlah partai
+            <input type="text" id="terbaru" value="25" size="5" inputmode="numeric">
+          </label>
+          <label>Profil engine
+            <select id="profil">
+              <option value="cepat" selected>cepat — depth 10, ~370 MB (30x lebih cepat, 3 dari 4 kesalahan besar ketemu)</option>
+              <option value="hemat">hemat — depth 16, ~370 MB</option>
+              <option value="normal">normal — depth 20, ~500 MB</option>
+              <option value="dalam">dalam — depth 24, ~690 MB</option>
+            </select>
+          </label>
+          <label class="datar">
+            <input type="checkbox" id="ulang"> analisis ulang yang sudah ada
+          </label>
+        </div>
+
+        <div class="alat alat-mesin">
+          <button type="button" id="lihat">Lihat dulu</button>
+          <button type="button" id="mulai" class="utama">Mulai analisa</button>
+          <button type="button" id="antrekan" title="Kerjakan nanti, begitu ada slot engine kosong">+ Antrekan</button>
+          <span class="kecil redup" id="catatan-mulai"></span>
+        </div>
+        <div class="alat" style="margin-top:8px">
+          <label class="kecil redup" title="Engine dikurung di sebagian inti CPU; sisanya selalu kosong untuk aplikasi lain">
+            Engine boleh memakai paling banyak
+            <select id="batas-cpu">
+              <option value="25">25% CPU</option>
+              <option value="50" selected>50% CPU</option>
+              <option value="75">75% CPU</option>
+              <option value="100">100% CPU</option>
+            </select>
+          </label>
+          <span class="kecil redup" id="ket-cpu"></span>
+        </div>
+
+        <div id="pratinjau" class="pratinjau" hidden></div>
+      </div>
+    </div>
+
+    <div class="kartu">
+      <h2 class="judul-kartu">Yang sedang berjalan
+        <span class="kanan kecil redup" id="jumlah-berjalan"></span>
+      </h2>
+      <div class="alat bar-jeda" id="bar-jeda">
+        <button type="button" id="jeda-semua" title="Bekukan semua engine di laptop ini supaya CPU kosong; lanjutkan kapan saja dari posisi yang sama">⏸ Jeda semua</button>
+        <span class="kecil redup" id="ket-jeda">Engine bisa dijeda kalau laptop mau dipakai untuk yang lain.</span>
+      </div>
+      <div id="tugas"><div class="pesan kecil">Belum ada batch yang dijalankan.</div></div>
+      <details id="bungkus-riwayat" hidden>
+        <summary class="kecil redup riwayat-judul">Batch yang sudah selesai (<span id="jumlah-riwayat">0</span>)</summary>
+        <div id="riwayat"></div>
+      </details>
+    </div>
+
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Antrean otomatis
+      <span class="kanan kecil redup" id="ringkas-antrean"></span>
+    </h2>
+    <p class="kecil redup sub-kartu">
+      Pekerjaan di sini dijalankan sendiri begitu ada slot engine kosong, satu
+      per satu. Antreannya tersimpan di berkas: kalau komputer dimatikan,
+      sisanya dilanjutkan setelah dinyalakan lagi — tapi selama komputer mati,
+      tidak ada yang berjalan.
+    </p>
+    <div class="mesin-isi">
+      <div class="alat" style="margin-top:0">
+        <button type="button" id="jaga">Hidupkan penjaga</button>
+        <label class="kecil redup">paling banyak
+          <select id="maks-penjaga" title="Makin besar makin cepat antreannya habis, tapi laptop makin berat">
+            <option value="1">1 batch</option>
+            <option value="2" selected>2 batch</option>
+          </select>
+        </label>
+        <span class="kecil redup" id="status-penjaga">memuat…</span>
+      </div>
+      <div id="daftar-antrean" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Pembantu tablet/HP
+      <span class="kanan kecil redup" id="ringkas-pembantu"></span>
+    </h2>
+    <p class="kecil redup sub-kartu">
+      Tablet atau HP di WiFi yang sama ikut menganalisis partai yang belum
+      dianalisis, memakai Stockfish di browser-nya — CPU laptop tidak terpakai
+      untuk partai itu. Partai GM dikerjakan dulu, lalu partaimu sendiri. Hasilnya setara
+      profil cepat.
+    </p>
+    <div class="mesin-isi">
+      <div id="pembantu-peringatan" class="galat" hidden></div>
+      <div class="kecil">Di tablet/HP, buka browser lalu ketik:</div>
+      <div id="pembantu-alamat" class="pembantu-alamat">memuat…</div>
+      <div class="alat">
+        <span class="kecil">Kode:</span>
+        <strong id="pembantu-kode" class="pembantu-kode">······</strong>
+        <button type="button" id="pembantu-ganti-kode" title="Perangkat yang sudah memakai kode lama akan berhenti">Ganti kode</button>
+      </div>
+      <div id="daftar-pembantu" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <details class="kartu kartu-catatan">
+    <summary>Yang perlu diketahui</summary>
+    <div class="mesin-isi kecil redup">
+      <p>
+        Analisa berjalan sebagai proses tersendiri, jadi halaman ini boleh
+        ditutup dan server boleh dimatikan — batchnya tetap jalan. Hasil tiap
+        partai disimpan begitu selesai.
+      </p>
+      <p>
+        Laptop ini boleh menjalankan <strong>dua batch engine sekaligus</strong>
+        (lebih dari itu laptop tidak bisa dipakai; engine juga berprioritas rendah). Tombol Mulai baru
+        menolak kalau semua slot terpakai — batch yang dijalankan lewat terminal
+        ikut dihitung.
+      </p>
+      <p>
+        Kalau dihentikan di tengah, partai yang sudah selesai tetap tersimpan;
+        satu partai yang sedang dihitung akan terpilih lagi di batch berikutnya.
+      </p>
+      <p style="margin-bottom:0">
+        Perkiraan waktu dihitung dari kecepatan analisis yang sudah tercatat di
+        database, bukan tebakan tetap.
+      </p>
+    </div>
+  </details>
+</main>
+
+<script src="/static/mesin.js"></script>
+</body>
+</html>

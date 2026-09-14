@@ -1,0 +1,653 @@
+/* Chess GM Database - mode terang saja, sesuai permintaan. */
+
+:root {
+    --teks: #1a1a1a;
+    --teks-redup: #6b7280;
+    --latar: #f7f7f5;
+    --kartu: #ffffff;
+    --garis: #e2e2df;
+    --aksen: #2f6f4f;
+    --aksen-redup: #eaf3ee;
+    --putih-menang: #1a7f37;
+    --hitam-menang: #a33;
+    --remis: #8a6d1f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--latar);
+    color: var(--teks);
+    font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+a { color: var(--aksen); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header {
+    background: var(--kartu);
+    border-bottom: 1px solid var(--garis);
+    padding: 10px 20px 12px;
+    position: sticky; top: 0; z-index: 20;
+}
+header .bungkus {
+    max-width: 1180px; margin: 0 auto;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+header h1 { font-size: 19px; margin: 0; line-height: 0; }
+header h1 .logo { height: 34px; width: auto; display: block; }
+@media (max-width: 600px) { header h1 .logo { height: 26px; } }
+header h1 a { color: var(--teks); }
+header .angka { color: var(--teks-redup); font-size: 13px; margin-left: auto; }
+
+/* bilah tab di bawah logo: dua kelompok (database · analisis diri) */
+.nav-utama { border-top: 1px solid var(--garis); margin: 10px -20px -12px; padding: 0 20px; }
+.nav-utama .bungkus { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.nav-utama .bungkus::-webkit-scrollbar { display: none; }
+.nav-utama a {
+    padding: 9px 12px; font-size: 13.5px; color: var(--teks-redup); white-space: nowrap;
+    border-bottom: 2px solid transparent;
+}
+.nav-utama a:hover { color: var(--teks); text-decoration: none; background: #fafaf8; }
+.nav-utama a.aktif { color: var(--teks); font-weight: 600; border-bottom-color: var(--aksen); }
+.nav-utama .pemisah { width: 1px; background: var(--garis); margin: 9px 8px; flex: none; }
+
+/* kontrol dasar yang sama di semua halaman */
+input[type=text], select {
+    font: inherit; color: inherit; background: #fff;
+    border: 1px solid var(--garis); border-radius: 6px; padding: 6px 10px;
+}
+input[type=text]:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--aksen); outline-offset: 1px;
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 20px; }
+
+/* ---------- kontrol pencarian ---------- */
+.saring {
+    background: var(--kartu);
+    border: 1px solid var(--garis);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+}
+.saring input[type=text], .saring select {
+    padding: 7px 10px;
+    border: 1px solid var(--garis);
+    border-radius: 6px;
+    background: #fff;
+    font: inherit;
+    color: inherit;
+}
+.saring input[type=text] { flex: 1; min-width: 220px; }
+.saring .cari-baris { flex-basis: 100%; display: flex; gap: 8px; }
+.saring .cari-baris input { min-width: 0; }
+.saring label { font-size: 13px; color: var(--teks-redup); }
+
+/* Satu ukuran untuk tombol dan tautan-bertombol (14 px). Dulu tombol 15 px dan
+   tautan 13 px bersebelahan, sehingga kartu Latihan terlihat tidak rata. */
+button {
+    padding: 6px 13px;
+    border: 1px solid var(--garis);
+    border-radius: 6px;
+    background: #fff;
+    font: inherit; font-size: 14px; line-height: 1.4;
+    color: var(--teks);
+    cursor: pointer;
+}
+button { transition: background .12s, border-color .12s; }
+button:hover:not(:disabled) { background: var(--aksen-redup); border-color: var(--aksen); }
+button:disabled { opacity: .4; cursor: default; }
+button.utama { background: var(--aksen); color: #fff; border-color: var(--aksen); }
+button.utama:hover { background: #275c42; }
+
+/* ---------- tabel partai ---------- */
+.kartu {
+    background: var(--kartu);
+    border: 1px solid var(--garis);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.gulir { overflow-x: auto; }
+main > .kartu + .kartu { margin-top: 16px; }
+/* tabel di kolom kanan halaman papan lebih rapat supaya muat di 1280 px */
+.papan-tata table { font-size: 13.5px; }
+.papan-tata th, .papan-tata td { padding: 8px 9px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th {
+    text-align: left; padding: 9px 12px;
+    background: #fafaf8; border-bottom: 1px solid var(--garis);
+    font-weight: 600; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .03em;
+    color: var(--teks-redup); white-space: nowrap;
+}
+td { padding: 9px 12px; border-bottom: 1px solid #f0f0ed; }
+tbody tr:nth-child(even) { background: #fbfbfa; }
+tbody tr:hover { background: var(--aksen-redup); }
+tbody tr { cursor: pointer; }
+
+.hasil { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+.hasil-1-0 { color: var(--putih-menang); }
+.hasil-0-1 { color: var(--hitam-menang); }
+.hasil-remis { color: var(--remis); }
+.hasil-jalan { color: var(--teks-redup); }
+
+.gelar {
+    font-size: 11px; font-weight: 700; color: #8a5a00;
+    background: #fdf3dd; padding: 1px 4px; border-radius: 3px; margin-right: 4px;
+}
+.tercentang { color: var(--aksen); }
+.redup { color: var(--teks-redup); }
+.kecil { font-size: 12.5px; }
+.mono { font-variant-numeric: tabular-nums; }
+
+/* ---------- paginasi ---------- */
+.paginasi {
+    display: flex; gap: 8px; align-items: center; justify-content: center;
+    padding: 14px; flex-wrap: wrap;
+}
+
+/* ---------- halaman partai ---------- */
+/* Lebar papan juga dibatasi TINGGI layar: di browser yang di-zoom, papan 520 px
+   lebih tinggi dari jendela dan tombol di bawahnya terpotong (screenshot Ray,
+   13 Sep). 210 px = header + nav + baris tombol di bawah papan. */
+.papan-tata {
+    display: grid;
+    grid-template-columns: minmax(300px, min(520px, calc(100vh - 210px))) 1fr;
+    gap: 20px;
+    align-items: start;
+}
+@media (max-width: 860px) { .papan-tata { grid-template-columns: 1fr; } }
+
+#papan { width: 100%; }
+#papan .board-b72b1 { box-shadow: 0 2px 10px rgba(0, 0, 0, .12); border-color: #5f7d4a; }
+/* tema papan hijau-krem, selaras dengan warna situs (menimpa warna bawaan chessboard.js) */
+#papan .white-1e1d7 { background-color: #eeeed2; color: #769656; }
+#papan .black-3c85d { background-color: #769656; color: #eeeed2; }
+
+/* kepala pertandingan di kartu info partai */
+.laga { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
+.laga-sisi.hitam { text-align: right; }
+.laga-nama { font-size: 17px; font-weight: 600; line-height: 1.3; }
+.laga-nama a { color: var(--teks); }
+.laga-hasil {
+    font-size: 21px; font-weight: 700; padding: 4px 12px; border-radius: 8px;
+    background: #fafaf8; border: 1px solid var(--garis); white-space: nowrap;
+}
+
+.kendali {
+    display: flex; gap: 6px; justify-content: center;
+    margin-top: 12px; flex-wrap: wrap;
+}
+.kendali button { min-width: 46px; font-size: 16px; }
+
+.info-partai { padding: 14px; }
+.info-partai h2 { margin: 0 0 4px; font-size: 17px; }
+.info-partai dl {
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 4px 14px; margin: 12px 0 0; font-size: 13.5px;
+}
+.info-partai dt { color: var(--teks-redup); }
+.info-partai dd { margin: 0; }
+
+.daftar-langkah {
+    max-height: 420px; overflow-y: auto;
+    padding: 10px; font-size: 14px; line-height: 1.9;
+}
+.daftar-langkah .nomor { color: var(--teks-redup); margin-right: 2px; }
+.langkah {
+    display: inline-block; padding: 1px 6px; border-radius: 4px;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.langkah:hover { background: var(--aksen-redup); }
+.langkah.aktif { background: var(--aksen); color: #fff; }
+
+.eval-fen {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11.5px; color: var(--teks-redup);
+    word-break: break-all; padding: 10px 14px;
+    border-top: 1px solid var(--garis);
+}
+
+/* ---------- analisis engine (Phase 2) ---------- */
+.papan-baris { display: flex; gap: 8px; align-items: stretch; }
+.papan-baris #papan { flex: 1; min-width: 0; }
+
+.eval-bar {
+    width: 22px; flex: none; position: relative;
+    background: #262626; border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--garis);
+}
+.eval-bar-putih {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: #f4f4f2; transition: height .25s ease;
+}
+.eval-bar-angka {
+    position: absolute; left: 0; right: 0; text-align: center;
+    font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: #fff; text-shadow: 0 0 2px #000; padding: 2px 0;
+}
+.eval-bar-angka.bawah { bottom: 0; color: #111; text-shadow: none; }
+.eval-bar-angka.atas  { top: 0; }
+
+.klas-blunder    { color: #b3261e; font-weight: 700; }
+.klas-mistake    { color: #c2620b; font-weight: 700; }
+.klas-inaccuracy { color: #a08300; font-weight: 600; }
+.klas-terbaik    { color: var(--putih-menang); }
+.langkah .tanda  { font-size: 12px; margin-left: 1px; }
+.langkah.klas-blunder.aktif, .langkah.klas-mistake.aktif,
+.langkah.klas-inaccuracy.aktif, .langkah.klas-terbaik.aktif { color: #fff; }
+
+.komentar {
+    margin-top: 10px; padding: 10px 12px;
+    background: var(--kartu); border: 1px solid var(--garis); border-radius: 8px;
+    font-size: 14px; min-height: 42px;
+}
+.komentar .variasi { color: var(--teks-redup); font-size: 13px; }
+
+.grafik { display: block; width: 100%; height: 120px; cursor: crosshair; }
+.grafik-jam { height: 80px; }
+.grafik-tren { height: 140px; cursor: default; }
+
+.sorot-main    { box-shadow: inset 0 0 0 100px rgba(255, 210, 60, .5); }
+.sorot-terbaik { box-shadow: inset 0 0 0 100px rgba(52, 120, 220, .45); }
+
+.akurasi-kotak {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;
+}
+.akurasi-kotak .angka-besar { font-size: 26px; font-weight: 700; line-height: 1.1; }
+.akurasi-kotak .label { font-size: 12px; color: var(--teks-redup); }
+
+.pesan { padding: 22px; text-align: center; color: var(--teks-redup); }
+.galat {
+    background: #fdeaea; border: 1px solid #f5c2c2; color: #922;
+    padding: 12px 14px; border-radius: 8px; margin-bottom: 16px;
+    /* pesan kunci penulis datang beberapa baris; jangan diratakan jadi satu */
+    white-space: pre-line;
+}
+
+/* ---------- antarmuka ringkas (F11) ---------- */
+header .angka strong { color: var(--teks); }
+.saring .label-mini { color: var(--teks-redup); }
+.saringan-aktif {
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--teks-redup);
+}
+.saringan-aktif .chip {
+    background: var(--aksen-redup); color: var(--aksen);
+    padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+}
+.saringan-aktif .chip a { color: inherit; }
+.saringan-aktif button { padding: 1px 8px; font-size: 12px; line-height: 1.4; }
+.tautan-baris { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.tautan-baris a {
+    padding: 6px 13px; border: 1px solid var(--garis); border-radius: 6px;
+    font-size: 14px; line-height: 1.4; background: #fff;
+}
+.tautan-baris a:hover { background: var(--aksen-redup); border-color: var(--aksen); text-decoration: none; }
+.tautan-baris a.utama { background: var(--aksen); border-color: var(--aksen); color: #fff; }
+.tautan-baris a.utama:hover { background: #275c42; }
+.judul-kartu {
+    font-size: 15px; margin: 0; padding: 12px 14px 4px;
+    display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+}
+.judul-kartu .kanan { margin-left: auto; font-weight: 400; }
+/* keterangan kecil di samping judul ("· 5 akun") jangan ikut tebal */
+.judul-kartu .kecil, .judul-kartu .redup { font-weight: 400; }
+
+/* Ringkasan: daftar centang pemain sebagai kisi. Dulu mengalir seperti
+   paragraf sehingga nama terpotong di tengah ("GM Nakamura, / Hikaru"). */
+#daftar-akun {
+    flex-basis: 100%;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 2px 12px; font-size: 13px;
+}
+#daftar-akun label {
+    margin-right: 0 !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    padding: 2px 0; color: var(--teks);
+}
+#daftar-akun label:has(input:checked) { color: var(--aksen); font-weight: 600; }
+.kendali.ikon-tombol button { min-width: 38px; font-size: 15px; }
+
+/* ---------- profil GM, momen kritis, tersimpan, latihan (F15–F18) ---------- */
+.bar-wdl { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 6px 0 4px; background: #eee; }
+.bar-wdl .menang { background: var(--putih-menang); }
+.bar-wdl .remis  { background: #b5b5b0; }
+.bar-wdl .kalah  { background: #b3261e; }
+
+.preferensi-grid { display: grid; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 860px) { .preferensi-grid { grid-template-columns: 1fr; } }
+.preferensi-kolom { padding: 4px 14px 12px; border-left: 1px solid var(--garis); }
+.preferensi-kolom:first-child { border-left: 0; }
+.preferensi-kolom h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .03em;
+    color: var(--teks-redup); margin: 8px 0 6px; font-weight: 600;
+}
+.pref-baris {
+    display: grid; grid-template-columns: 56px 1fr 44px 52px; gap: 8px;
+    align-items: center; font-size: 13.5px; padding: 3px 0;
+}
+.pref-baris .isi { height: 8px; background: var(--aksen); border-radius: 4px; }
+.pref-baris .n, .pref-baris .skor { text-align: right; font-variant-numeric: tabular-nums; }
+
+.momen-daftar { margin-top: 4px; font-size: 13.5px; }
+.momen-baris { display: flex; gap: 10px; align-items: baseline; padding: 3px 4px; cursor: pointer; border-radius: 4px; }
+.momen-baris:hover { background: #fafaf8; }
+.momen-baris .turun { min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; color: #b3261e; font-weight: 600; }
+
+.tersimpan-baris {
+    display: flex; gap: 12px; justify-content: space-between; align-items: flex-start;
+    padding: 10px 14px; border-top: 1px solid var(--garis); flex-wrap: wrap;
+}
+.tersimpan-baris:first-child { border-top: 0; }
+.tersimpan-judul { font-weight: 600; }
+/* Tanpa min-width:0 sebuah flex item tidak boleh mengecil di bawah lebar isinya.
+   Akibatnya nyata di halaman Mesin: satu baris log batch yang panjang membuat
+   kolomnya lebih lebar daripada kartunya, sehingga bar kemajuan 39% terlihat
+   melewati setengah kartu — dilaporkan Ray 13 Sep. Isi yang kepanjangan
+   sekarang menggulir di dalam kotaknya sendiri. */
+.tersimpan-isi { min-width: 0; }
+.tersimpan-isi > * { max-width: 100%; }
+
+.latihan-isi { padding: 10px 14px 14px; font-size: 14px; }
+.latihan-isi > * + * { margin-top: 3px; }
+.latihan-benar { color: var(--putih-menang); font-weight: 700; font-size: 18px; }
+.latihan-salah { color: #b3261e; font-weight: 700; font-size: 18px; }
+/* garis warna di kiri kartu jawaban: hasilnya terbaca sekilas tanpa huruf besar */
+.kartu.jawab-benar { border-left: 4px solid var(--putih-menang); }
+.kartu.jawab-salah { border-left: 4px solid #b3261e; }
+
+/* Kotak "Kedudukan: imbang → kalah". Sengaja kelas sendiri: dulu memakai
+   `kecil latihan-salah`, dan .latihan-salah (18 px tebal) menimpa .kecil. */
+.kedudukan {
+    margin-top: 8px !important; padding: 7px 10px; border-radius: 6px;
+    background: #fafaf8; border: 1px solid var(--garis);
+    font-size: 13.5px; color: var(--teks-redup);
+}
+.kedudukan.fatal { background: #fdeaea; border-color: #f5c2c2; color: #922; }
+.kedudukan .catatan { display: block; font-weight: 600; margin-top: 1px; }
+
+/* baris angka sesi latihan: angka tebal, keterangan redup */
+/* Angka selalu di baris sendiri di bawah kendali: kalau berbagi baris dengan
+   dropdown, keterangannya terjepit jadi kolom sempit. */
+.latihan-strip {
+    display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 13px; color: var(--teks-redup);
+    flex-basis: 100%; order: 10; min-width: 0;
+}
+#ulang-semua { margin-left: auto; }
+.latihan-strip strong { color: var(--teks); font-variant-numeric: tabular-nums; }
+.latihan-strip .dilewati { flex-basis: 100%; font-size: 12px; }
+.latihan-strip:empty { display: none; }
+
+/* ---------- lebar ponsel (F21) ----------
+   Diuji headless pada viewport 497 px (lebar minimum Chrome headless);
+   tidak memakai overflow-x: hidden supaya overflow sungguhan tetap terlihat. */
+.papan-tata > * { min-width: 0; }
+@media (max-width: 860px) {
+    main { padding: 12px; }
+    .papan-tata { grid-template-columns: minmax(0, 1fr) !important; }
+    .akurasi-kotak { grid-template-columns: 1fr 1fr !important; }
+    .saring input[type=text] { min-width: 0; flex-basis: 100%; }
+    .saring select { max-width: 100%; }
+    header .bungkus { gap: 6px 12px; }
+}
+@media (max-width: 480px) {
+    .akurasi-kotak { grid-template-columns: 1fr !important; }
+    .pref-baris { grid-template-columns: 48px 1fr 40px 46px; }
+}
+
+/* ---------- keluar dari praktik GM (F22) ---------- */
+.langkah.keluar-teori { border-left: 3px solid var(--aksen); border-radius: 0 4px 4px 0; }
+.teori-langkah { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; margin-top: 6px; font-size: 13.5px; }
+.teori-langkah .n { color: var(--teks-redup); font-variant-numeric: tabular-nums; }
+
+/* ---------- penyelidikan kekalahan (F29) ---------- */
+.chip.sebab-waktu, .angka-besar.sebab-waktu { color: #b45309; }
+.chip.sebab-missclick, .angka-besar.sebab-missclick { color: #7c3aed; }
+.chip.sebab-blunder, .angka-besar.sebab-blunder { color: #b3261e; }
+.chip.sebab-dikalahkan, .angka-besar.sebab-dikalahkan { color: #374151; }
+.chip.sebab-belum, .angka-besar.sebab-belum { color: var(--teks-redup); }
+.chip.sebab-waktu { background: #fff4e5; }
+.chip.sebab-missclick { background: #f3e8ff; }
+.chip.sebab-blunder { background: #fdeaea; }
+.chip.sebab-dikalahkan { background: #f1f2f4; }
+.chip.sebab-belum { background: #f5f5f3; }
+td .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; white-space: nowrap; font-size: 12.5px; }
+.sebab-kotak { padding: 14px; margin: 0; }
+
+/* ---------- repertoire vs GM (F33) ---------- */
+.chip.status-sama, .angka-besar.status-sama { color: var(--putih-menang); }
+.chip.status-dipakai, .angka-besar.status-dipakai { color: #374151; }
+.chip.status-jarang, .angka-besar.status-jarang { color: #b45309; }
+.chip.status-skor, .angka-besar.status-skor { color: #b3261e; }
+.chip.status-sama { background: var(--aksen-redup); }
+.chip.status-dipakai { background: #f1f2f4; }
+.chip.status-jarang { background: #fff4e5; }
+.chip.status-skor { background: #fdeaea; }
+
+/* ---------- halaman impor ---------- */
+.impor-isi { padding: 12px 14px 14px; }
+.impor-isi textarea {
+    width: 100%; margin-top: 4px; font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px; padding: 8px; border: 1px solid var(--garis);
+    border-radius: 6px; background: #fff; resize: vertical;
+}
+.jatuhkan {
+    border: 2px dashed var(--garis); border-radius: 8px; padding: 18px;
+    text-align: center; background: #fafaf8; transition: border-color .12s, background .12s;
+}
+.jatuhkan.aktif { border-color: var(--aksen); background: var(--aksen-redup); }
+.impor-isi code {
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+    background: #f1f2f4; padding: 1px 4px; border-radius: 3px;
+}
+
+/* daftar akun di halaman impor */
+.daftar-akun { border: 1px solid var(--garis); border-radius: 8px; overflow: hidden; }
+.akun-baris {
+    display: flex; gap: 12px; align-items: center; justify-content: space-between;
+    padding: 9px 12px; border-top: 1px solid var(--garis);
+}
+.akun-baris:first-child { border-top: 0; }
+.akun-baris:nth-child(even) { background: #fbfbfa; }
+.akun-isi { min-width: 0; }
+.akun-status { margin-top: 2px; }
+
+/* ---------- halaman mesin (analisis batch) ---------- */
+.mesin-isi { padding: 12px 14px 14px; }
+.mesin-isi .baris-isi {
+    display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end;
+    margin-top: 12px; font-size: 13px;
+}
+.mesin-isi .baris-isi[hidden], .mesin-isi .baris-isi label[hidden] { display: none; }
+.mesin-isi .baris-isi label { display: flex; flex-direction: column; gap: 4px; color: var(--teks-redup); }
+/* kotak centang: label mendatar, bukan bertumpuk seperti label isian */
+.mesin-isi .baris-isi label.datar { flex-direction: row; align-items: center; gap: 6px; }
+.mesin-isi code {
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+    background: #f1f2f4; padding: 1px 4px; border-radius: 3px;
+}
+.pratinjau { margin-top: 12px; border-top: 1px solid var(--garis); padding-top: 10px; }
+.pratinjau-atas { margin-bottom: 8px; }
+.daftar-partai, .log-ekor {
+    font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; line-height: 1.5;
+    background: #fafaf8; border: 1px solid var(--garis); border-radius: 6px;
+    padding: 8px 10px; margin: 8px 0; overflow-x: auto; white-space: pre;
+}
+.log-ekor { color: var(--teks-redup); max-height: 130px; overflow-y: auto; }
+/* daftar contoh partai bisa puluhan baris; jangan mendorong tombol keluar layar */
+.daftar-partai { max-height: 230px; overflow-y: auto; }
+.kemajuan {
+    height: 8px; border-radius: 4px; background: #eee; overflow: hidden; margin: 8px 0 4px;
+}
+.kemajuan-isi { height: 100%; background: var(--aksen); transition: width .4s; }
+.kemajuan-tebal { height: 10px; margin: 12px 0 6px; }
+
+/* tiga angka kemajuan di atas halaman */
+.angka-strip {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+}
+@media (max-width: 560px) { .angka-strip { grid-template-columns: 1fr; } }
+.angka-strip .angka-besar { font-size: 26px; font-weight: 700; line-height: 1.1; }
+.angka-strip .label { font-size: 12px; color: var(--teks-redup); margin-top: 2px; }
+
+/* keterangan di bawah judul kartu, bukan di dalam <h2> yang tebal */
+.sub-kartu { margin: 0; padding: 0 14px 2px; }
+.mesin-isi .baris-pisah { border-top: 1px solid var(--garis); padding-top: 12px; }
+.alat-mesin { margin-top: 14px; }
+/* slot engine: kuning waktu tinggal satu, merah waktu penuh */
+.slot-hampir { color: #b45309; }
+/* tombol simpan posisi: pakai kata, bukan cuma bintang — dulu tidak ada yang
+   tahu gunanya (Ray, 13 Sep) */
+.tombol-simpan { white-space: nowrap; }
+.ikon-tombol button.tombol-simpan { min-width: 0; font-size: 13px; padding: 4px 10px; }
+
+/* tombol "Analisa partai ini" di kartu Belum dianalisis */
+.tombol-analisa {
+    display: inline-block; margin: 4px 0 10px;
+    background: var(--aksen); color: #fff; border-radius: 6px;
+    padding: 7px 12px; font-size: 13px;
+}
+.tombol-analisa:hover { background: #275c42; text-decoration: none; }
+
+.riwayat-judul { cursor: pointer; padding: 8px 14px; list-style: none; border-top: 1px solid var(--garis); }
+.riwayat-judul::-webkit-details-marker { display: none; }
+.riwayat-judul::before { content: "▸ "; }
+details[open] > .riwayat-judul::before { content: "▾ "; }
+
+/* kartu catatan yang bisa dilipat */
+.kartu-catatan { margin-top: 16px; }
+.kartu-catatan > summary {
+    cursor: pointer; padding: 12px 14px; font-size: 15px; font-weight: 600;
+    list-style: none;
+}
+.kartu-catatan > summary::-webkit-details-marker { display: none; }
+.kartu-catatan > summary::before { content: "▸ "; color: var(--teks-redup); }
+.kartu-catatan[open] > summary::before { content: "▾ "; }
+.kartu-catatan p { margin: 0 0 8px; }
+.kartu-catatan p:last-child { margin-bottom: 0; }
+
+/* ---------- papan analisis ---------- */
+.alat {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 10px; font-size: 13px;
+}
+.alat[hidden] { display: none; }
+.alat .status-posisi {
+    flex: 1; min-width: 0; color: var(--teks-redup);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.alat.susun {
+    padding: 8px 10px; background: var(--kartu);
+    border: 1px solid var(--garis); border-radius: 6px; color: var(--teks-redup);
+}
+.alat .pisah { flex: 1; }
+.alat select, .engine-atur select {
+    padding: 4px 6px; font: inherit; font-size: 13px; color: var(--teks);
+    border: 1px solid var(--garis); border-radius: 6px; background: #fff;
+}
+.label-mini { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+.centang { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.saring .centang { font-size: 13px; color: var(--teks-redup); }
+.saring .centang.centang-aktif { color: var(--aksen); font-weight: 600; }
+
+.segmen {
+    display: inline-flex; position: relative; overflow: hidden;
+    border: 1px solid var(--garis); border-radius: 6px; background: #fff;
+}
+.segmen input { position: absolute; opacity: 0; width: 0; height: 0; }
+.segmen label {
+    padding: 5px 12px; cursor: pointer; font-size: 13px; color: var(--teks-redup);
+    border-left: 1px solid var(--garis);
+}
+.segmen label:first-of-type { border-left: 0; }
+.segmen input:checked + label { background: var(--aksen); color: #fff; }
+.segmen input:focus-visible + label { outline: 2px solid var(--aksen); outline-offset: -2px; }
+
+.ikon-tombol { display: flex; gap: 4px; }
+.ikon-tombol button { min-width: 34px; padding: 4px 8px; font-size: 15px; line-height: 1.2; }
+
+.fen-baris { display: flex; gap: 6px; margin-top: 10px; }
+.fen-baris input {
+    flex: 1; min-width: 0;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+    padding: 6px 8px; border: 1px solid var(--garis); border-radius: 6px; background: #fff;
+}
+.fen-baris button { padding: 4px 10px; font-size: 13px; }
+
+.engine-kepala {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 16px 10px;
+}
+.engine-skor {
+    font-size: 30px; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.engine-skor.putih { color: var(--putih-menang); }
+.engine-skor.hitam { color: #b3261e; }
+.engine-meta { font-size: 12px; color: var(--teks-redup); margin-top: 5px; }
+.engine-atur {
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    padding: 8px 16px 10px; border-top: 1px solid var(--garis);
+    font-size: 13px; color: var(--teks-redup);
+}
+.engine-status { padding: 6px 16px 10px; font-size: 12.5px; color: var(--teks-redup); }
+.engine-status:empty { display: none; }
+.engine-status.gagal { color: #922; }
+
+.pv {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 8px 14px; border-top: 1px solid var(--garis);
+    font-size: 14px; line-height: 1.7;
+}
+.pv:first-child { border-top: 0; }
+.pv-skor { flex: none; min-width: 56px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pv-skor.putih { color: var(--putih-menang); }
+.pv-skor.hitam { color: #b3261e; }
+.pv-langkah { flex: 1; }
+.pv .nomor { color: var(--teks-redup); margin-left: 2px; }
+.pv .langkah { padding: 1px 3px; border-radius: 3px; cursor: pointer; }
+.pv .langkah:hover { background: var(--aksen-redup); }
+.pv-depth { flex: none; font-size: 11px; color: var(--teks-redup); }
+/* Di Latihan tiap langkah langsung anak .pv (tanpa .pv-langkah), jadi harus
+   boleh turun baris; kalau tidak, garis panjang terpotong di tepi kartu. */
+#telusur-garis .pv { flex-wrap: wrap; gap: 0 4px; }
+
+/* bidak cadangan chessboard.js (mode susun) agar rapat dengan papan */
+#papan .spare-pieces-7492f { padding: 2px 0; }
+
+/* klik-untuk-jalan di papan analisis */
+#papan .sorot-pilih  { box-shadow: inset 0 0 0 100px rgba(255, 210, 60, .55); }
+#papan .sorot-target { background-image: radial-gradient(circle, rgba(0, 0, 0, .28) 20%, transparent 23%); }
+#papan .sorot-target.ada-bidak { background-image: radial-gradient(circle, transparent 60%, rgba(0, 0, 0, .28) 63%); }
+
+/* variasi di halaman partai */
+.komentar.variasi { border-color: var(--aksen); background: var(--aksen-redup); }
+.komentar.variasi .variasi-langkah .langkah { padding: 1px 5px; }
+.komentar.variasi .variasi-mesin { margin-top: 6px; line-height: 1.7; }
+.komentar.variasi .variasi-alat { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.komentar.variasi .variasi-alat button { padding: 3px 10px; font-size: 13px; }
+
+/* ---------- halaman Mesin: batch gagal & teks panjang (A24) ---------- */
+/* Batch yang berhenti sebelum selesai TIDAK boleh terlihat sama dengan yang
+   beres. Sebelumnya keduanya memakai lencana hijau yang sama. */
+.chip.status-gagal { color: #b3261e; background: #fdeaea; }
+
+/* Baris perintah panjang ("--pemain \"Svidler, Peter\" --terbaru 25 ...") tadinya
+   terpotong di tepi kartu. Biarkan membungkus, jangan dipotong. */
+.tugas-kartu code,
+#tugas code, #riwayat code {
+    display: block; white-space: pre-wrap; word-break: break-word;
+    background: #fafaf8; border: 1px solid var(--garis); border-radius: 6px;
+    padding: 6px 8px; margin-top: 6px;
+}
+/* Ekor log tetap satu baris per baris (kolomnya rapi), tapi jelas bisa digeser. */
+#tugas .log-ekor, #riwayat .log-ekor { overflow-x: auto; scrollbar-width: thin; }
+#tugas, #riwayat { overflow: visible; }
+
+/* Pembantu tablet/HP di halaman Mesin */
+.pembantu-alamat { font-family: ui-monospace, Consolas, monospace; font-size: 1.05rem; font-weight: 600; margin: 2px 0 8px; overflow-wrap: anywhere; }
+.pembantu-kode { font-family: ui-monospace, Consolas, monospace; font-size: 1.3rem; letter-spacing: .15em; }

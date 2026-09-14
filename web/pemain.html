@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pemain — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/" class="aktif">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="kartu info-partai" id="profil"><div class="pesan">Memuat pemain...</div></div>
+
+  <div class="kartu" id="preferensi" style="margin-top:16px" hidden></div>
+
+  <div class="papan-tata" style="margin-top:16px; grid-template-columns: 1fr 1fr">
+    <div class="kartu" id="pembukaan-putih"></div>
+    <div class="kartu" id="pembukaan-hitam"></div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Partai terbaru</h2>
+    <div class="gulir">
+      <table>
+        <thead><tr><th>Tanggal</th><th>Putih</th><th>Hitam</th><th>Hasil</th><th>ECO</th><th>Turnamen</th><th>Akurasi</th></tr></thead>
+        <tbody id="baris-partai"></tbody>
+      </table>
+    </div>
+    <div class="paginasi" id="tautan-semua"></div>
+  </div>
+</main>
+
+<script src="/static/vendor/chess.js"></script>
+<script src="/static/pemain.js"></script>
+</body>
+</html>

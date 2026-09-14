@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+    <span class="angka" id="ringkasan">memuat...</span>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/" class="aktif">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <form class="saring" id="form-saring" autocomplete="off">
+    <div class="cari-baris">
+      <input type="text" id="cari" placeholder="Cari pemain, turnamen, atau pembukaan">
+      <button type="submit" class="utama">Cari</button>
+      <button type="button" id="reset">Reset</button>
+    </div>
+
+    <label>ECO
+      <input type="text" id="eco" placeholder="A22" size="5" style="width:70px">
+    </label>
+
+    <label class="centang" id="label-tanpa-saya" title="Sembunyikan partai akun online sendiri; sisanya partai GM (TWIC + broadcast)">
+      <input type="checkbox" id="tanpa-saya"> Tanpa partai saya
+    </label>
+
+    <label>Sumber
+      <select id="sumber">
+        <option value="">semua</option>
+        <option value="gm">partai GM (TWIC + broadcast)</option>
+      </select>
+    </label>
+
+    <label>Hasil
+      <select id="hasil">
+        <option value="">semua</option>
+        <option value="1-0">1-0</option>
+        <option value="0-1">0-1</option>
+        <option value="1/2-1/2">remis</option>
+        <option value="menang-kalah">menang-kalah saja (tanpa remis)</option>
+        <option value="*">belum selesai</option>
+      </select>
+    </label>
+
+    <label>Gelar
+      <select id="gelar">
+        <option value="">semua</option>
+        <option value="GM">GM</option>
+        <option value="IM">IM</option>
+        <option value="FM">FM</option>
+        <option value="WGM">WGM</option>
+        <option value="WIM">WIM</option>
+        <option value="CM">CM</option>
+        <option value="NM">NM</option>
+      </select>
+    </label>
+
+    <label>Analisis
+      <select id="dianalisis">
+        <option value="">semua</option>
+        <option value="true">sudah</option>
+        <option value="false">belum</option>
+      </select>
+    </label>
+
+    <label>Urut
+      <select id="urut">
+        <option value="terbaru">terbaru</option>
+        <option value="terlama">terlama</option>
+        <option value="elo">elo tertinggi</option>
+        <option value="terpanjang">terpanjang</option>
+      </select>
+    </label>
+
+    <input type="hidden" id="pemain_id">
+    <input type="hidden" id="warna">
+    <input type="hidden" id="eco_dari">
+    <input type="hidden" id="eco_sampai">
+    <input type="hidden" id="fen">
+    <div id="repertoire" style="flex-basis:100%; display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+      <span class="label-mini">Repertoire</span>
+    </div>
+    <div id="saringan-aktif" class="saringan-aktif" style="flex-basis:100%" hidden></div>
+  </form>
+
+  <div class="kartu">
+    <div class="gulir">
+      <table>
+        <thead>
+          <tr>
+            <th>Tanggal</th>
+            <th>Putih</th>
+            <th>Hitam</th>
+            <th>Hasil</th>
+            <th>ECO</th>
+            <th>Pembukaan</th>
+            <th>Turnamen</th>
+            <th class="mono">Lgk</th>
+            <th title="Akurasi Putih / Hitam menurut engine">Akurasi</th>
+          </tr>
+        </thead>
+        <tbody id="baris-partai">
+          <tr><td colspan="9" class="pesan">Memuat partai...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="paginasi" id="paginasi"></div>
+  </div>
+</main>
+
+<script src="/static/daftar.js"></script>
+</body>
+</html>

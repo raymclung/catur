@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kelemahan — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html" class="aktif">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="saring">
+    <label>Akun
+      <select id="akun"></select>
+    </label>
+    <label>Lawan
+      <select id="lawan" title="Ketentuan Ray: lawan ber-rating di atas 2200">
+        <option value="ketentuan" selected>rating &gt; 2200 atau bergelar</option>
+        <option value="2200">hanya rating &gt; 2200</option>
+        <option value="gelar">hanya bergelar</option>
+        <option value="semua">semua lawan</option>
+      </select>
+    </label>
+    <label>Format
+      <select id="format">
+        <option value="semua" selected>semua</option>
+        <option value="bullet">bullet</option>
+        <option value="blitz">blitz</option>
+        <option value="rapid">rapid</option>
+        <option value="klasik">klasik</option>
+      </select>
+    </label>
+    <label>Partai teranalisis
+      <select id="batas">
+        <option value="60">60 terbaru</option>
+        <option value="120" selected>120 terbaru</option>
+        <option value="300">300 terbaru</option>
+      </select>
+    </label>
+    <span class="kecil redup" id="status"></span>
+  </div>
+
+  <div class="kartu">
+    <div class="akurasi-kotak sebab-kotak" id="ikhtisar"></div>
+  </div>
+
+  <div class="papan-tata" style="margin-top:16px; grid-template-columns: 1fr 1fr">
+    <div class="kartu" id="per-fase"></div>
+    <div class="kartu" id="per-warna-format"></div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px" id="per-pembukaan"></div>
+</main>
+
+<script src="/static/alat-catur.js"></script>
+<script src="/static/akun-pribadi.js"></script>
+<script src="/static/kelemahan.js"></script>
+</body>
+</html>

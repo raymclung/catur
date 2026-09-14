@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Posisi Tersimpan — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html" class="aktif">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="kartu">
+    <h2 class="judul-kartu">Posisi tersimpan <span class="redup kecil" id="jumlah"></span></h2>
+    <p class="kecil redup sub-kartu">
+      Penanda buku untuk posisi catur — pembukaan yang ingin kamu hafalkan,
+      posisi kritis dari partai yang kalah, atau posisi yang mau kamu evaluasi
+      lagi nanti. Yang disimpan hanya posisinya (FEN) beserta judul dan catatan,
+      jadi bisa dibuka kapan saja di papan analisis atau penjelajah.
+    </p>
+    <div id="daftar"><div class="pesan kecil">memuat…</div></div>
+  </div>
+</main>
+
+<script src="/static/tersimpan.js"></script>
+</body>
+</html>

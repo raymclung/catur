@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Partai — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/vendor/chessboard.min.css">
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/" class="aktif">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="papan-tata">
+
+    <div>
+      <div class="papan-baris">
+        <div class="eval-bar" id="eval-bar" hidden title="Evaluasi engine, sudut pandang Putih">
+          <div class="eval-bar-putih" id="eval-bar-isi"></div>
+          <span class="eval-bar-angka" id="eval-angka"></span>
+        </div>
+        <div id="papan"></div>
+      </div>
+
+      <div id="komentar" class="komentar" hidden></div>
+      <div id="variasi" class="komentar variasi" hidden></div>
+
+      <div class="kendali">
+        <button id="ke-awal"  title="Langkah pertama (Home)">⏮</button>
+        <button id="mundur"   title="Langkah sebelumnya (←)">◀</button>
+        <button id="autoplay" title="Mainkan otomatis (spasi)">▶</button>
+        <button id="maju"     title="Langkah berikutnya (→)">▶|</button>
+        <button id="ke-akhir" title="Langkah terakhir (End)">⏭</button>
+        <button id="balik"    title="Balik papan (F)">⇅</button>
+      </div>
+      <div class="paginasi kecil" id="navigasi-daftar" hidden></div>
+
+      <div class="kartu" id="jam-kartu" style="margin-top:12px" hidden title="Sisa waktu tiap langkah; garis merah = 10 detik (zeitnot). Klik untuk lompat.">
+        <svg id="grafik-jam" class="grafik grafik-jam" viewBox="0 0 600 80" preserveAspectRatio="none"
+             role="img" aria-label="Grafik sisa waktu per langkah"></svg>
+        <div class="kecil redup" id="jam-ket" style="padding:4px 10px 8px"></div>
+      </div>
+
+      <div class="kartu" id="grafik-kartu" style="margin-top:12px" hidden>
+        <svg id="grafik" class="grafik" viewBox="0 0 600 120" preserveAspectRatio="none"
+             role="img" aria-label="Grafik evaluasi per langkah"></svg>
+      </div>
+
+      <div class="kartu" style="margin-top:12px">
+        <div class="eval-fen" id="fen">FEN akan muncul di sini</div>
+        <div class="eval-fen"><a id="ke-analisis" href="/static/analisis.html" title="Susun ulang dan evaluasi posisi ini dengan engine">analisa posisi ini di papan analisis →</a></div>
+        <div class="eval-fen">
+          <button id="simpan-posisi" class="tombol-simpan" data-asal="partai"
+                  title="Simpan posisi ini supaya bisa dibuka lagi dari tab Tersimpan" hidden>☆ Simpan posisi ini</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="kartu info-partai" id="info">
+        <div class="pesan">Memuat partai...</div>
+      </div>
+
+      <div class="kartu info-partai" id="ringkasan-analisis" style="margin-top:16px" hidden></div>
+
+      <div class="kartu info-partai" id="teori-gm" style="margin-top:16px" hidden></div>
+
+      <div class="kartu" id="penjelajah" style="margin-top:16px">
+        <h2 style="font-size:15px;margin:0;padding:12px 14px 4px">Di database, dari posisi ini GM memainkan
+          <a id="tautan-jelajah" href="/jelajah" class="kecil" style="margin-left:8px">jelajahi dari sini →</a>
+          <a id="tautan-daftar-posisi" href="/" class="kecil" style="margin-left:8px" title="Semua partai yang mencapai posisi ini, di halaman daftar">daftar partai →</a></h2>
+        <div class="gulir">
+          <table>
+            <thead><tr><th>Langkah</th><th>Partai</th><th>Skor Putih</th><th>+ = −</th><th>Elo rata</th><th></th></tr></thead>
+            <tbody id="penjelajah-tabel"><tr><td colspan="6" class="pesan kecil">memuat...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="kartu" style="margin-top:16px">
+        <div class="daftar-langkah" id="daftar-langkah"></div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="/static/vendor/jquery.min.js"></script>
+<script src="/static/vendor/chessboard.min.js"></script>
+<script src="/static/vendor/chess.js"></script>
+<script src="/static/alat-catur.js"></script>
+<script src="/static/klik-papan.js"></script>
+<script src="/static/papan.js"></script>
+<script src="/static/simpan-posisi.js"></script>
+<script>
+/* Tautan "papan analisis" mengikuti FEN yang ditampilkan papan.js, tanpa
+   mengubah papan.js: cukup mengamati teks #fen. */
+(function () {
+  var f = document.getElementById("fen"), a = document.getElementById("ke-analisis");
+  function segarkan() {
+    var t = (f.textContent || "").trim();
+    if (t.indexOf("/") > 0) a.href = "/static/analisis.html?fen=" + encodeURIComponent(t);
+  }
+  new MutationObserver(segarkan).observe(f, { childList: true, characterData: true, subtree: true });
+  segarkan();
+})();
+</script>
+</body>
+</html>

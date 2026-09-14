@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jelajah Pembukaan — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/vendor/chessboard.min.css">
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah" class="aktif">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="papan-tata">
+    <div>
+      <div id="papan"></div>
+      <div class="kendali ikon-tombol">
+        <button id="undo"  title="Batalkan langkah (←)">↶</button>
+        <button id="reset" title="Posisi awal">⟲</button>
+        <button id="balik" title="Balik papan (F)">⇅</button>
+        <button id="simpan-posisi" class="tombol-simpan" data-asal="jelajah"
+                title="Simpan posisi ini supaya bisa dibuka lagi dari tab Tersimpan" hidden>☆ Simpan</button>
+      </div>
+      <div class="komentar" id="baris-langkah" title="→ mainkan langkah teratas · 1–9 pilih baris · ← batalkan">Posisi awal</div>
+      <div class="kartu" style="margin-top:12px"><div class="eval-fen" id="fen"></div></div>
+    </div>
+
+    <div>
+      <div class="saring" style="margin-bottom:12px">
+        <label>Sumber
+          <select id="sumber">
+            <option value="gm">GM (TWIC + broadcast)</option>
+            <option value="semua">semua</option>
+            <option value="lichess-user">Lichess (saya)</option>
+            <option value="chesscom">Chess.com (saya)</option>
+          </select>
+        </label>
+        <label>Elo min
+          <select id="min-elo">
+            <option value="">semua</option>
+            <option value="2500">2500</option>
+            <option value="2600">2600</option>
+            <option value="2700">2700</option>
+          </select>
+        </label>
+        <input type="text" id="cari-pemain" placeholder="Pemain" style="flex:0 1 150px;min-width:110px" title="Ketik nama lalu Enter; pilih di daftar sebelahnya">
+        <select id="pemain" title="Hanya partai pemain ini">
+          <option value="">semua</option>
+        </select>
+        <select id="warna" title="Warna pemain yang dipilih">
+          <option value="">kedua warna</option>
+          <option value="putih">sebagai Putih</option>
+          <option value="hitam">sebagai Hitam</option>
+        </select>
+      </div>
+
+      <div class="kartu">
+        <h2 class="judul-kartu">Langkah dari posisi ini <span class="redup kecil" id="total"></span> <a class="kecil kanan" id="tautan-posisi" href="/" title="Semua partai yang mencapai posisi ini">daftar partai →</a></h2>
+        <div class="gulir">
+          <table>
+            <thead><tr><th>Langkah</th><th>Partai</th><th id="th-skor" title="Skor dari sudut pandang warna yang jalan">Skor Putih</th><th>+ = −</th><th>Elo rata</th><th>Terakhir</th><th></th></tr></thead>
+            <tbody id="baris-langkah-tabel"><tr><td colspan="7" class="pesan">memuat...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="kartu" style="margin-top:16px">
+        <h2 class="judul-kartu" title="Sepuluh partai ber-Elo tertinggi dari posisi ini; klik untuk membuka">Partai contoh</h2>
+        <div class="gulir">
+          <table>
+            <thead><tr><th>Tanggal</th><th>Putih</th><th>Hitam</th><th>Hasil</th><th>Lanjut</th><th>Turnamen</th></tr></thead>
+            <tbody id="baris-contoh"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/vendor/jquery.min.js"></script>
+<script src="/static/vendor/chessboard.min.js"></script>
+<script src="/static/vendor/chess.js"></script>
+<script src="/static/jelajah.js"></script>
+<script src="/static/simpan-posisi.js"></script>
+</body>
+</html>

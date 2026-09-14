@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impor — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html" class="aktif">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="kartu">
+    <h2 class="judul-kartu">Partai saya
+      <span class="kanan kecil redup" id="catatan-akun"></span>
+    </h2>
+    <p class="kecil redup sub-kartu">
+      Menarik partai <strong>baru saja</strong> dari tiap akun — yang sudah ada
+      tidak diunduh ulang, jadi aman ditekan tiap hari. Chess.com dibaca per
+      bulan, jadi satu akun bisa makan setengah menit sampai semenit.
+    </p>
+    <div class="impor-isi">
+      <div id="daftar-akun" class="daftar-akun"><div class="pesan kecil">memuat daftar akun…</div></div>
+      <div class="alat" style="margin-top:12px">
+        <button type="button" id="tarik-semua" class="utama">Tarik semua akun</button>
+        <button type="button" id="tarik-analisis" title="Partai yang pernah kamu mintakan analisis komputer di Lichess langsung terisi analisisnya, tanpa engine laptop">Ambil analisis Lichess</button>
+        <label class="kecil datar" title="Abaikan partai yang sudah ada dan unduh seluruh riwayat — lama, hanya untuk menambal yang terlewat">
+          <input type="checkbox" id="semua-riwayat"> tarik seluruh riwayat
+        </label>
+        <span class="kecil redup" id="status-tarik"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="papan-tata" style="margin-top:16px; grid-template-columns: 1fr 1fr">
+
+    <div class="kartu">
+      <h2 class="judul-kartu">Berkas PGN <span class="redup kecil">seret ke sini, pilih, atau tempel</span></h2>
+      <div class="impor-isi">
+        <div id="jatuhkan" class="jatuhkan">
+          <input type="file" id="berkas" accept=".pgn,.txt,text/plain" multiple hidden>
+          <button type="button" id="pilih" class="utama">Pilih berkas…</button>
+          <div class="kecil redup" style="margin-top:8px">atau seret berkas ke kotak ini</div>
+          <div class="kecil" id="daftar-berkas" style="margin-top:8px"></div>
+        </div>
+
+        <label class="kecil redup" style="display:block;margin-top:12px">Atau tempel isi PGN
+          <textarea id="teks" rows="6" spellcheck="false"
+                    placeholder="[Event &quot;...&quot;]&#10;[White &quot;...&quot;]&#10;1. e4 e5 ..."></textarea>
+        </label>
+
+        <div class="alat" style="margin-top:10px">
+          <label>Label sumber
+            <input type="text" id="sumber" value="unggahan" size="12"
+                   title="Dipakai untuk menandai asal partai. Huruf kecil, angka, dan tanda hubung.">
+          </label>
+          <span class="pisah"></span>
+          <button type="button" id="kirim-pgn" class="utama">Impor</button>
+        </div>
+        <div class="kecil redup" style="margin-top:8px">
+          Berkas di atas 8 MB tolak lewat halaman ini; pakai perintah
+          <code>python impor_pgn.py</code> untuk yang sebesar itu.
+        </div>
+      </div>
+    </div>
+
+    <div class="kartu">
+      <h2 class="judul-kartu">Turnamen Lichess <span class="redup kecil">tautan broadcast</span></h2>
+      <div class="impor-isi">
+        <label class="kecil redup" style="display:block">Tautan ronde atau turnamen
+          <input type="text" id="url" spellcheck="false" style="width:100%;margin-top:4px"
+                 placeholder="https://lichess.org/broadcast/.../.../abcd1234">
+        </label>
+        <label class="kecil datar" style="margin-top:8px">
+          <input type="checkbox" id="seluruh-turnamen" checked>
+          ambil seluruh turnamen, bukan cuma ronde di tautan ini
+        </label>
+        <label class="kecil datar" style="margin-top:4px" title="Lichess menyertakan evaluasi di tiap langkah partai siaran. Hasilnya ditandai sebagai analisis Lichess.">
+          <input type="checkbox" id="pakai-eval" checked>
+          langsung isi analisisnya dari evaluasi Lichess (tanpa engine laptop)
+        </label>
+        <div class="alat" style="margin-top:10px">
+          <span class="status-posisi kecil redup">Tempel tautan ronde atau turnamen dari browser.</span>
+          <button type="button" id="kirim-url" class="utama">Impor</button>
+        </div>
+        <div class="kecil redup" style="margin-top:10px">
+          Ronde yang sudah lengkap dilewati, jadi tautan yang sama boleh diimpor
+          berkali-kali. Turnamen yang masih berjalan akan diambil lagi di lain
+          waktu untuk melengkapi hasilnya.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Hasil</h2>
+    <div id="hasil"><div class="pesan kecil">Belum ada impor di sesi ini.</div></div>
+  </div>
+</main>
+
+<script src="/static/impor.js"></script>
+</body>
+</html>
