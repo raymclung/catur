@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beranda — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+    <span class="angka" id="ringkasan">memuat...</span>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html" class="aktif">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="kartu">
+    <h2 class="judul-kartu">Akun saya <span class="redup kecil" id="status-akun"></span></h2>
+    <div class="gulir">
+      <table>
+        <thead><tr><th>Akun</th><th>Sumber</th><th>Elo terakhir</th><th>Partai</th><th>Dianalisis</th><th>Skor</th><th></th></tr></thead>
+        <tbody id="baris-akun"><tr><td colspan="7" class="pesan kecil">memuat…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="papan-tata" style="margin-top:16px; grid-template-columns: 1fr 1fr">
+    <div class="kartu">
+      <h2 class="judul-kartu">Kekalahan terbaru <a class="kecil kanan" href="/static/kekalahan.html">semua →</a></h2>
+      <div id="kekalahan-ringkas"><div class="pesan kecil">memuat…</div></div>
+    </div>
+
+    <div class="kartu">
+      <h2 class="judul-kartu">Latihan</h2>
+      <div class="latihan-isi" id="latihan-ringkas">memuat…</div>
+    </div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Lanjutkan</h2>
+    <div class="tautan-baris" id="pintasan" style="padding:0 14px 14px"></div>
+  </div>
+</main>
+
+<script src="/static/alat-catur.js"></script>
+<script src="/static/akun-pribadi.js"></script>
+<script src="/static/beranda.js"></script>
+</body>
+</html>

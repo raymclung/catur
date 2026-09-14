@@ -1,0 +1,25 @@
+# Pemain sasaran untuk impor_twic.py — satu FIDE ID per baris.
+# Format: <fide_id>  <nama>   # catatan
+#
+# Bukan daftar resmi top 10 FIDE (halaman FIDE tidak bisa dibaca program).
+# Sunting sesuka hati. impor_twic.py mencetak nama yang benar-benar muncul
+# untuk tiap ID, jadi ID yang keliru langsung terlihat.
+#
+# Semua ID di bawah sudah dicocokkan dengan nama di database (10 Sep 2026),
+# kecuali yang ditandai "belum diverifikasi".
+
+1503014    Carlsen, Magnus            # 704 partai di db
+2020009    Caruana, Fabiano           # 847 partai di db
+2016192    Nakamura, Hikaru           # 516 partai di db
+46616543   Gukesh D                   # 562 partai di db
+35009192   Erigaisi, Arjun            # 661 partai di db
+25059530   Praggnanandhaa, R          # 746 partai di db
+12573981   Firouzja, Alireza          # 739 partai di db
+14204118   Abdusattorov, Nodirbek     # 784 partai di db
+4168119    Nepomniachtchi, Ian        # 520 partai di db
+8603405    Wei Yi                     # 373 partai di db
+5202213    So, Wesley                 # terlihat di twic1661
+12940690   Keymer, Vincent            # terlihat di twic1661
+24116068   Giri, Anish                # terlihat di twic1661
+14205483   Sindarov, Javokhir         # terlihat di twic1661
+8603677    Ding Liren                 # belum diverifikasi dari data

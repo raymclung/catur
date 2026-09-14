@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Latihan — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/vendor/chessboard.min.css">
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html" class="aktif">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="papan-tata">
+    <div>
+      <div id="papan"></div>
+      <div class="alat">
+        <span class="status-posisi" id="status">memuat…</span>
+        <button id="menyerah" title="Tampilkan jawaban dan buka engine untuk menelusuri sendiri">Menyerah &amp; analisa</button>
+        <button id="lewati" title="Lewati soal ini (N)">Lewati ›</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="saring" style="margin-bottom:12px">
+        <label>Latihan
+          <select id="mode" title="Kesalahan: posisi sebelum blunder di partai sendiri. Pembukaan: posisi repertoire tempat langkahmu jarang dimainkan GM.">
+            <option value="kesalahan" selected>kesalahan partai</option>
+            <option value="pembukaan">pembukaan repertoire</option>
+          </select>
+        </label>
+        <label hidden id="label-akun">Akun
+          <select id="akun" title="Akun online milik sendiri; \"semua akun\" menggabungkan semuanya"></select>
+        </label>
+        <label hidden>Lawan
+          <select id="lawan" title="Partai mana yang dijadikan soal, menurut lawannya (ketentuan Ray: rating > 2200)">
+            <option value="ketentuan">rating &gt; 2200 atau bergelar</option>
+            <option value="2200">hanya rating &gt; 2200</option>
+            <option value="gelar">hanya bergelar</option>
+            <option value="semua" selected>semua lawan</option>
+          </select>
+        </label>
+        <label hidden>Format
+          <select id="format" title="Kontrol waktu: bullet < 3 menit, blitz < 8, rapid < 25, selebihnya klasik (perkiraan durasi = waktu awal + 40 × inkremen)">
+            <option value="semua" selected>semua</option>
+            <option value="bullet">bullet</option>
+            <option value="blitz">blitz</option>
+            <option value="rapid">rapid</option>
+            <option value="klasik">klasik</option>
+          </select>
+        </label>
+        <label hidden>Jenis
+          <select id="jenis" title="Kesalahan yang dijadikan soal">
+            <option value="blunder">blunder (??)</option>
+            <option value="blunder,mistake" selected>blunder + kesalahan (?)</option>
+          </select>
+        </label>
+        <div class="latihan-strip" id="skor"></div>
+        <button type="button" id="ulang-semua" title="Lupakan soal yang sudah dikuasai; semua soal muncul lagi">Ulang semua</button>
+      </div>
+
+      <div class="kartu">
+        <h2 class="judul-kartu">Soal <span class="kanan redup kecil" id="nomor"></span></h2>
+        <div class="latihan-isi" id="soal"><div class="pesan kecil">memuat…</div></div>
+      </div>
+
+      <div class="kartu" style="margin-top:16px" id="kartu-jawab" hidden>
+        <div class="latihan-isi" id="jawab"></div>
+      </div>
+
+      <!-- Setelah dijawab, papan boleh dimainkan bebas dan engine menilai tiap
+           posisi: "kenapa langkahku salah" baru terjawab kalau variasinya bisa
+           dicoba sendiri. -->
+      <div class="kartu" style="margin-top:16px" id="kartu-mesin" hidden>
+        <div class="engine-kepala">
+          <div>
+            <div class="engine-skor" id="telusur-skor" title="Sudut pandang Putih">—</div>
+            <div class="engine-meta" id="telusur-meta">Stockfish</div>
+          </div>
+          <button id="telusur-ulang" title="Kembali ke posisi soal">Posisi soal</button>
+        </div>
+        <div id="telusur-garis" title="Klik langkah untuk memainkannya"></div>
+        <div class="engine-status" id="telusur-status"></div>
+      </div>
+
+      <!-- Perkembangan (A38): dihitung server dari tabel latihan_jawaban, untuk
+           mode yang sedang dibuka. -->
+      <div class="kartu" style="margin-top:16px">
+        <h2 class="judul-kartu">Perkembangan</h2>
+        <div class="latihan-isi" id="perkembangan"><div class="pesan kecil">memuat…</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/vendor/jquery.min.js"></script>
+<script src="/static/vendor/chessboard.min.js"></script>
+<script src="/static/vendor/chess.js"></script>
+<script src="/static/klik-papan.js"></script>
+<script src="/static/alat-catur.js"></script>
+<script src="/static/akun-pribadi.js"></script>
+<script src="/static/latihan.js"></script>
+</body>
+</html>

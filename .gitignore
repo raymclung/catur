@@ -1,0 +1,40 @@
+# Turunan dari data/pgn lewat impor; dibuat ulang dengan `python -m app.db`
+data/catur.db
+data/catur.db-wal
+data/catur.db-shm
+
+# Biner 109 MB; unduh sendiri dari stockfishchess.org
+engine/
+
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# TWIC: "free for personal use only" — tidak disebarkan ulang lewat git
+data/twic/
+
+# PGN Mentor: gratis diunduh, tapi ketentuan penyebaran ulang tidak
+# dinyatakan; diperlakukan seperti TWIC
+data/pgnmentor/
+
+# Cadangan database (cadangkan_db.py); turunan, besar
+data/backup/
+
+# Cadangan/salinan database lain (turunan, puluhan MB)
+data/*.bak*
+data/*.db.bak*
+
+# Berkas kunci satu-penulis (app/kunci_penulis.py)
+data/.penulis.lock
+data/.penulis.info
+
+# Catatan tugas analisa yang diluncurkan halaman Mesin (PID + jalur log lokal;
+# turunan, hanya berarti di mesin ini).
+data/tugas-analisa.json
+
+# Antrean analisis (PID + jalur lokal; turunan, hanya berarti di mesin ini).
+data/antrean-analisa.json
+
+# Pengaturan lokal mesin ini (batas CPU engine).
+data/pengaturan-mesin.json

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pembantu analisis — Catur</title>
+<!-- Sengaja tanpa gaya.css: dari perangkat lain hanya halaman ini yang boleh dibuka. -->
+<style>
+  :root { color-scheme: light; --tinta:#1f2328; --redup:#656d76; --garis:#d8dee4; --hijau:#1a7f37; --merah:#cf222e; --biru:#0969da; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 40px; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: #f6f8fa; color: var(--tinta); }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .redup { color: var(--redup); font-size: .92rem; }
+  .kartu { background: #fff; border: 1px solid var(--garis); border-radius: 10px; padding: 16px; margin-top: 14px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--garis); border-radius: 8px; }
+  input#kode { font-size: 1.4rem; letter-spacing: .3em; text-align: center; }
+  button { width: 100%; margin-top: 16px; font: inherit; font-weight: 600; padding: 14px; border: 0; border-radius: 8px;
+           background: var(--hijau); color: #fff; }
+  button.berhenti { background: var(--merah); }
+  button:disabled { opacity: .5; }
+  .angka { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .angka b { display: block; font-size: 1.5rem; }
+  .status { margin-top: 12px; font-weight: 600; }
+  .galat { color: var(--merah); white-space: pre-line; }
+  .bar { height: 8px; background: #eaeef2; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--biru); }
+  ul { padding-left: 20px; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pembantu analisis</h1>
+  <div class="redup">Perangkat ini ikut menganalisis partai di database laptop, memakai Stockfish di browser.</div>
+
+  <section class="kartu" id="kartu-masuk">
+    <label for="kode">Kode dari halaman Mesin di laptop</label>
+    <input id="kode" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="000000">
+    <label for="nama">Nama perangkat ini</label>
+    <input id="nama" maxlength="40">
+    <button id="tombol">Mulai</button>
+    <div id="pesan" class="status"></div>
+  </section>
+
+  <section class="kartu">
+    <div class="angka">
+      <div><b id="n-partai">0</b><span class="redup">partai selesai</span></div>
+      <div><b id="n-kecepatan">–</b><span class="redup">posisi/detik</span></div>
+      <div><b id="n-rata">–</b><span class="redup">detik/partai</span></div>
+    </div>
+    <div id="sekarang" class="redup" style="margin-top:12px">Belum mulai.</div>
+    <div class="bar"><div id="bar"></div></div>
+  </section>
+
+  <section class="kartu redup">
+    Supaya tetap jalan:
+    <ul>
+      <li>Biarkan halaman ini terbuka di depan dan <b>layar menyala</b> (atur waktu layar mati ke paling lama). Kalau layar mati atau pindah aplikasi, browser menghentikan hitungannya.</li>
+      <li>Colokkan pengisi daya. HP akan terasa hangat; itu wajar.</li>
+      <li>Laptop harus menyala dan di WiFi yang sama.</li>
+      <li>Kalau berhenti di tengah, partainya otomatis kembali ke antrean.</li>
+    </ul>
+  </section>
+</main>
+<script src="/static/pembantu.js"></script>
+</body>
+</html>

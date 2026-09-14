@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ringkasan — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan" class="aktif">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <form class="saring" id="form-cari" autocomplete="off" style="margin-bottom:8px">
+    <input type="text" id="cari-pemain" placeholder="Tambah pemain" title="Ketik nama lalu Enter; pemain yang ditemukan masuk ke daftar centang">
+    <button type="submit">Tambah</button>
+    <span id="hasil-cari" class="kecil redup"></span>
+  </form>
+
+  <div class="saring" id="pilih-pemain">
+    <span class="label-mini">Pemain</span>
+    <label style="margin-left:auto">Format
+      <select id="format" title="Kontrol waktu (kolom format di database)">
+        <option value="semua" selected>semua</option>
+        <option value="bullet">bullet</option>
+        <option value="blitz">blitz</option>
+        <option value="rapid">rapid</option>
+        <option value="klasik">klasik</option>
+      </select>
+    </label>
+    <span id="daftar-akun" class="kecil">memuat...</span>
+    <button type="button" class="utama" id="muat">Tampilkan</button>
+  </div>
+
+  <div id="isi"></div>
+</main>
+
+<script src="/static/akun-pribadi.js"></script>
+<script src="/static/ringkasan.js"></script>
+</body>
+</html>

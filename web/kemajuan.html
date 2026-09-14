@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kemajuan — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html" class="aktif">Kemajuan</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="saring">
+    <label>Akun
+      <select id="akun"></select>
+    </label>
+    <label>Format
+      <select id="format" title="Rating Lichess dan Chess.com berbeda per format; grafik Elo menggambar satu garis per format">
+        <option value="semua" selected>semua</option>
+        <option value="bullet">bullet</option>
+        <option value="blitz">blitz</option>
+        <option value="rapid">rapid</option>
+        <option value="klasik">klasik</option>
+      </select>
+    </label>
+    <label>Partai
+      <select id="batas">
+        <option value="500">500 terakhir</option>
+        <option value="1500" selected>1.500 terakhir</option>
+        <option value="4000">4.000 terakhir</option>
+      </select>
+    </label>
+    <label>Kelompok
+      <select id="kelompok">
+        <option value="auto" selected>otomatis</option>
+        <option value="bulan">per bulan</option>
+        <option value="tahun">per tahun</option>
+      </select>
+    </label>
+    <span class="kecil redup" id="status"></span>
+  </div>
+
+  <div class="kartu">
+    <div class="akurasi-kotak sebab-kotak" id="ikhtisar"></div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Rating <span class="redup kecil" id="ket-elo"></span></h2>
+    <svg id="grafik-elo" class="grafik grafik-tren" viewBox="0 0 600 140" preserveAspectRatio="none" role="img" aria-label="Grafik rating"></svg>
+    <div class="kecil redup" id="legenda-elo" style="padding:6px 14px 12px"></div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Akurasi engine <span class="redup kecil">hanya partai yang sudah dianalisis</span></h2>
+    <svg id="grafik-akurasi" class="grafik grafik-tren" viewBox="0 0 600 140" preserveAspectRatio="none" role="img" aria-label="Grafik akurasi"></svg>
+    <div class="kecil redup" id="ket-akurasi" style="padding:6px 14px 12px"></div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Angka per periode</h2>
+    <div class="gulir">
+      <table>
+        <thead><tr><th>Periode</th><th>Partai</th><th>Skor</th><th>+ = −</th><th>Elo rata</th><th>Akurasi</th><th>Dianalisis</th><th></th></tr></thead>
+        <tbody id="baris"><tr><td colspan="8" class="pesan kecil">memuat…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="/static/alat-catur.js"></script>
+<script src="/static/akun-pribadi.js"></script>
+<script src="/static/kemajuan.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# CLAUDE.md bagian 6: berkas teks proyek memakai akhir baris LF.
+# Tanpa ini, menulis berkas dengan mode teks di Windows diam-diam
+# menghasilkan CRLF (terjadi 12-13 Sep 2026 pada 16 berkas kode).
+*.py   text eol=lf
+*.md   text eol=lf
+*.js   text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.json text eol=lf
+
+# PGN sengaja tidak diatur: berkas dari Lichess/Chess.com memang CRLF,
+# dan isinya data sumber yang tidak boleh diubah.
