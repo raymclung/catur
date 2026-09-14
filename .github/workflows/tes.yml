@@ -1,0 +1,20 @@
+name: tes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tes:
+    # Windows, bukan Linux: kunci penulis dan antrean analisis memakai msvcrt.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pasang dependency (versi sama dengan mesin pengembangan)
+        run: python -m pip install chess==1.11.2 fastapi==0.141.1 "uvicorn[standard]==0.52.4"
+      - name: Jalankan tes
+        run: python -m unittest discover -s tests -v
