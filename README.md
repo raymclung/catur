@@ -7,6 +7,8 @@
 > Python · FastAPI · SQLite · vanilla HTML/JS. Documentation and code are in
 > Bahasa Indonesia.
 
+![Demo: daftar partai, penjelajah pembukaan, dan partai Carlsen vs Anand dengan analisis Stockfish](docs/demo.gif)
+
 Aplikasi web lokal untuk belajar catur dari partai grandmaster dan dari
 kekalahan sendiri. Semua partai (GM maupun pribadi) masuk satu database,
 dianalisis Stockfish, lalu dipakai untuk latihan.
