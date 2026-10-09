@@ -20,7 +20,9 @@
     status: document.getElementById("status"),
     ikhtisar: document.getElementById("ikhtisar"),
     jumlah: document.getElementById("jumlah"),
-    baris: document.getElementById("baris")
+    baris: document.getElementById("baris"),
+    jumlahPembukaan: document.getElementById("jumlah-pembukaan"),
+    barisPembukaan: document.getElementById("baris-pembukaan")
   };
 
   var akunSemua = [];
@@ -78,9 +80,17 @@
       "&batas=" + encodeURIComponent(el.batas.value) +
       (el.format.value !== "semua" ? "&format=" + encodeURIComponent(el.format.value) : "");
 
-    return ambil("/api/kekalahan?" + q).then(function (d) {
+    /* "batas" sengaja tidak dikirim: kartu pembukaan menghitung semua partai,
+       bukan hanya N kekalahan terbaru — skor butuh menang dan remis juga. */
+    var qPembukaan = q.replace(/&batas=[^&]*/, "");
+    el.barisPembukaan.textContent = "";
+    return Promise.all([
+      ambil("/api/kekalahan?" + q),
+      ambil("/api/kekalahan/pembukaan?" + qPembukaan)
+    ]).then(function (hasil) {
       if (ke !== permintaanKe) return;
-      gambar(d.partai.map(bentukBaris), d.ikhtisar, d.zeitnot);
+      gambar(hasil[0].partai.map(bentukBaris), hasil[0].ikhtisar, hasil[0].zeitnot);
+      gambarPembukaan(hasil[1]);
     }).catch(function (e) {
       galat("Gagal memuat: " + e.message);
       el.status.textContent = "";
@@ -108,6 +118,50 @@
   }
 
   /* ---------- tampilan ---------- */
+
+  /* Pembukaan yang paling sering kalah (GET /api/kekalahan/pembukaan). Urutan
+     dan tanda sampel kecil datang dari server; di sini hanya digambar. */
+  function gambarPembukaan(d) {
+    var t = d.total;
+    el.jumlahPembukaan.textContent = t.partai
+      ? "· " + t.partai + " partai, skor " + Math.round(100 * (t.menang + 0.5 * t.remis) / t.partai) + "%"
+      : "";
+    el.barisPembukaan.textContent = "";
+    if (!d.pembukaan.length) {
+      var tr0 = document.createElement("tr");
+      var td0 = buat("td", "pesan kecil", "Tidak ada partai untuk saringan ini");
+      td0.colSpan = 7;
+      tr0.appendChild(td0);
+      el.barisPembukaan.appendChild(tr0);
+      return;
+    }
+    d.pembukaan.forEach(function (p) {
+      var tr = document.createElement("tr");
+      if (p.sampel_kecil) {
+        tr.className = "redup";
+        tr.title = "Kurang dari " + d.sampel_kecil_di_bawah + " partai";
+      }
+      tr.appendChild(buat("td", "kecil", p.warna === "putih" ? "Putih" : "Hitam"));
+      var tdN = buat("td", "", p.keluarga);
+      if (p.contoh_nama.length) tdN.appendChild(buat("div", "kecil redup", p.contoh_nama.join(" · ")));
+      tr.appendChild(tdN);
+      tr.appendChild(buat("td", "mono", p.partai));
+      tr.appendChild(buat("td", "mono kecil", p.menang + " / " + p.remis + " / " + p.kalah));
+      tr.appendChild(buat("td", "mono", p.skor_persen + "%"));
+      tr.appendChild(buat("td", "mono", p.kalah + " (" + Math.round(p.kalah_persen) + "%)"));
+      var tdA = buat("td", "kecil");
+      tdA.style.whiteSpace = "nowrap";
+      if (p.kalah_terakhir) {
+        var a = document.createElement("a");
+        a.href = "/partai/" + p.kalah_terakhir.id;
+        a.title = "Kekalahan terakhir dengan pembukaan ini (" + (p.kalah_terakhir.tanggal || "?") + ")";
+        a.appendChild(teks("kalah terakhir →"));
+        tdA.appendChild(a);
+      }
+      tr.appendChild(tdA);
+      el.barisPembukaan.appendChild(tr);
+    });
+  }
 
   function gambar(hasil, ikhtisar, zeitnot) {
     el.status.textContent = "";

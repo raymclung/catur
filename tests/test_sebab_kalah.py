@@ -18,7 +18,7 @@ sys.path.insert(0, str(AKAR))
 
 from app.db import buat_skema, koneksi, sekarang
 from app.sebab_kalah import (detik_dipakai, golongkan, jam_per_ply, jam_sendiri,
-                             kalah_waktu, kekalahan, posisi_akhir, tag_pgn)
+                             kalah_waktu, kekalahan, pembukaan_kalah, posisi_akhir, tag_pgn)
 
 PGN_WAKTU = """[Event "Rated blitz game"]
 [Site "https://lichess.org/abc"]
@@ -240,6 +240,72 @@ class Kumpulan(unittest.TestCase):
 
     def test_tanpa_pemain(self):
         self.assertEqual(kekalahan(self.conn, [])["partai"], [])
+
+
+class PembukaanKalah(Kumpulan):
+    """Pembukaan yang paling sering kalah melawan lawan kuat (Ray, 9 Okt 2026)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute("INSERT INTO pemain(id,nama,nama_normal,dibuat_pada,gelar) "
+                          "VALUES(4,'Fm','fm',?,'FM')", (sekarang(),))
+        self.conn.commit()
+
+    def main(self, id_, lawan_id, hasil, eco, saya_putih=True, tanggal="2026.09.01", fmt="blitz"):
+        putih, hitam = (1, lawan_id) if saya_putih else (lawan_id, 1)
+        self.conn.execute(
+            "INSERT INTO partai(id,putih_id,hitam_id,hasil,pgn,sumber,hash_unik,diimpor_pada,"
+            "tanggal,format,jumlah_langkah,eco,elo_putih,elo_hitam) "
+            "VALUES(?,?,?,?,'','uji',?,?,?,?,40,?,1800,1800)",
+            (id_, putih, hitam, hasil, f"p{id_}", sekarang(), tanggal, fmt, eco))
+        self.conn.commit()
+
+    def test_gmim_hanya_gm_dan_im(self):
+        self.main(1, 2, "0-1", "A10")     # kalah vs GM
+        self.main(2, 4, "0-1", "A10")     # kalah vs FM: bukan GM/IM
+        self.main(3, 3, "0-1", "A10")     # tanpa gelar
+        d = pembukaan_kalah(self.conn, [1], lawan="gmim")
+        self.assertEqual(d["total"]["partai"], 1)
+        self.assertEqual(len(pembukaan_kalah(self.conn, [1], lawan="gelar")["pembukaan"]), 1)
+        self.assertEqual(pembukaan_kalah(self.conn, [1], lawan="gelar")["total"]["partai"], 2)
+        self.assertEqual(pembukaan_kalah(self.conn, [1], lawan="semua")["total"]["partai"], 3)
+
+    def test_hasil_dari_sudut_saya_dan_dipisah_warna(self):
+        self.main(1, 2, "1-0", "A10")                      # Putih, menang
+        self.main(2, 2, "1/2-1/2", "A15")                  # Putih, remis (keluarga sama)
+        self.main(3, 2, "0-1", "A20")                      # Putih, kalah
+        self.main(4, 2, "0-1", "B90", saya_putih=False)    # Hitam, MENANG
+        d = pembukaan_kalah(self.conn, [1], lawan="gmim")
+        per = {(p["warna"], p["keluarga"]): p for p in d["pembukaan"]}
+        eng = per[("putih", "English Opening")]
+        self.assertEqual((eng["menang"], eng["remis"], eng["kalah"]), (1, 1, 1))
+        self.assertEqual(eng["skor_persen"], 50.0)
+        sic = per[("hitam", "Sicilian Defense")]
+        self.assertEqual((sic["menang"], sic["kalah"]), (1, 0))
+        self.assertEqual(d["total"], {"partai": 4, "menang": 2, "remis": 1, "kalah": 1})
+
+    def test_urut_paling_sering_kalah_dan_kalah_terakhir(self):
+        for i, tgl in enumerate(["2026.01.01", "2026.03.01"], start=1):
+            self.main(i, 2, "1-0", "B90", saya_putih=False, tanggal=tgl)   # Hitam kalah 2x
+        self.main(3, 2, "0-1", "A10")                                        # Putih kalah 1x
+        d = pembukaan_kalah(self.conn, [1], lawan="gmim")
+        self.assertEqual(d["pembukaan"][0]["keluarga"], "Sicilian Defense")
+        self.assertEqual(d["pembukaan"][0]["kalah_terakhir"]["id"], 2)
+        self.assertTrue(d["pembukaan"][0]["sampel_kecil"])
+
+    def test_partai_belum_selesai_dan_format_disaring(self):
+        self.main(1, 2, "*", "A10")
+        self.main(2, 2, "0-1", "A10", fmt="bullet")
+        self.assertEqual(pembukaan_kalah(self.conn, [1], lawan="gmim")["total"]["partai"], 1)
+        self.assertEqual(pembukaan_kalah(self.conn, [1], "blitz", "gmim")["total"]["partai"], 0)
+
+    def test_kekalahan_juga_menerima_gmim(self):
+        self.partai(1, 2, 2600)      # GM
+        self.partai(2, 4, 2300)      # FM
+        self.assertEqual([p["id"] for p in kekalahan(self.conn, [1], lawan="gmim")["partai"]], [1])
+
+    def test_tanpa_akun(self):
+        self.assertEqual(pembukaan_kalah(self.conn, [])["pembukaan"], [])
 
 
 if __name__ == "__main__":

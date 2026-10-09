@@ -34,6 +34,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .analisis_db import mat_dari_sudut_pemain
 from .db import koneksi
+from .eco import keluarga_eco
 
 router = APIRouter(prefix="/api", tags=["kekalahan"])
 
@@ -46,7 +47,9 @@ AMBANG_ELO_LAWAN = 2200
 POLA_TAG = re.compile(r'\[(\w+)\s+"([^"]*)"\]')
 POLA_CLK = re.compile(r"\{[^}]*%clk\s+(\d+):(\d\d):(\d\d(?:\.\d+)?)[^}]*\}")
 
-LAWAN_VALID = ("ketentuan", "2200", "gelar", "semua")
+LAWAN_VALID = ("ketentuan", "2200", "gelar", "gmim", "semua")
+GELAR_GMIM = ("GM", "IM")
+SAMPEL_KECIL = 5        # di bawah ini satu-dua partai sudah membalik persentasenya
 SEBAB_URUT = ("waktu", "missclick", "blunder", "dikalahkan", "belum")
 
 
@@ -242,7 +245,12 @@ def _syarat_lawan(mode: str, tanda: str) -> str:
              f" ELSE pw.gelar END, '') <> ''")
     kuat = (f"COALESCE(CASE WHEN g.putih_id IN ({tanda}) THEN g.elo_hitam"
             f" ELSE g.elo_putih END, 0) > {int(AMBANG_ELO_LAWAN)}")
-    return {"semua": "", "gelar": gelar, "2200": kuat}.get(mode, f"({gelar} OR {kuat})")
+    # Daftar gelar konstanta kode, bukan masukan pengguna; disambung sebagai
+    # literal supaya hitungan placeholder `tanda` di pemanggil tetap benar.
+    daftar_gmim = ",".join(f"'{g}'" for g in GELAR_GMIM)
+    gmim = (f"(CASE WHEN g.putih_id IN ({tanda}) THEN pb.gelar"
+            f" ELSE pw.gelar END) IN ({daftar_gmim})")
+    return {"semua": "", "gelar": gelar, "2200": kuat, "gmim": gmim}.get(mode, f"({gelar} OR {kuat})")
 
 
 def kekalahan(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | None = None,
@@ -310,6 +318,95 @@ def kekalahan(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | No
 
     return {"partai": keluar, "ikhtisar": ikhtisar, "zeitnot": zeitnot,
             "lawan": lawan, "format": format_ or "semua"}
+
+
+def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | None = None,
+                    lawan: str = "gmim") -> dict:
+    """
+    Pembukaan mana yang paling sering kalah melawan lawan kuat, per warna.
+
+    Ray (ide 10 Sep, dikerjakan 9 Okt 2026): "pembukaan mana yang paling sering
+    kalah melawan GM/IM". Sengaja dari SEMUA partai selesai, bukan hanya yang
+    dianalisis: pertanyaannya soal hasil, dan syarat analisis hanya membuang
+    partai. Dikelompokkan per keluarga ECO (eco.py) seperti profil pemain,
+    karena nama pembukaan Chess.com/Lichess terlalu terpecah untuk dihitung.
+    Risiko yang diterima: partai vs GM/IM Ray hanya ±100 dan semuanya
+    bullet/blitz, jadi tiap baris ditandai `sampel_kecil` di bawah
+    SAMPEL_KECIL partai, bukan disembunyikan.
+    """
+    if not pemain_ids:
+        return {"pembukaan": [], "total": {"partai": 0, "menang": 0, "remis": 0, "kalah": 0}}
+    tanda = ",".join("?" * len(pemain_ids))
+    params: list = list(pemain_ids) * 3
+    sql = f"""
+        SELECT g.id, g.tanggal, g.eco, g.pembukaan, g.hasil,
+               CASE WHEN g.putih_id IN ({tanda}) THEN 'putih' ELSE 'hitam' END AS warna_saya
+        FROM partai g
+        JOIN pemain pw ON pw.id = g.putih_id
+        JOIN pemain pb ON pb.id = g.hitam_id
+        WHERE (g.putih_id IN ({tanda}) OR g.hitam_id IN ({tanda}))
+          AND g.hasil IN ('1-0', '0-1', '1/2-1/2')
+    """
+    if format_ and format_ != "semua":
+        sql += " AND g.format = ?"
+        params.append(format_)
+    syarat_lawan = _syarat_lawan(lawan, tanda)
+    if syarat_lawan:
+        sql += f" AND {syarat_lawan}"
+        params += list(pemain_ids) * syarat_lawan.count(f"IN ({tanda})")
+    sql += " ORDER BY g.tanggal DESC, g.id DESC"
+
+    kel: dict[tuple, dict] = {}
+    total = {"partai": 0, "menang": 0, "remis": 0, "kalah": 0}
+    for r in conn.execute(sql, params):
+        warna = r["warna_saya"]
+        eco = (r["eco"] or "").strip()
+        keluarga = keluarga_eco(eco) or (eco[:1] + "xx" if eco else "Tanpa ECO")
+        d = kel.setdefault((warna, keluarga), {"warna": warna, "keluarga": keluarga, "partai": 0,
+                                               "menang": 0, "remis": 0, "kalah": 0,
+                                               "nama": {}, "kalah_terakhir": None})
+        if r["hasil"] == "1/2-1/2":
+            hasil = "remis"
+        else:
+            hasil = "menang" if (r["hasil"] == "1-0") == (warna == "putih") else "kalah"
+        d["partai"] += 1
+        d[hasil] += 1
+        total["partai"] += 1
+        total[hasil] += 1
+        if r["pembukaan"]:
+            d["nama"][r["pembukaan"]] = d["nama"].get(r["pembukaan"], 0) + 1
+        # urutan SQL terbaru dulu, jadi kekalahan pertama yang ditemui = terakhir
+        if hasil == "kalah" and d["kalah_terakhir"] is None:
+            d["kalah_terakhir"] = {"id": r["id"], "tanggal": r["tanggal"]}
+
+    keluar = []
+    for d in kel.values():
+        nama = sorted(d.pop("nama").items(), key=lambda x: -x[1])
+        keluar.append({
+            **d,
+            "skor_persen": round(100 * (d["menang"] + 0.5 * d["remis"]) / d["partai"], 1),
+            "kalah_persen": round(100 * d["kalah"] / d["partai"], 1),
+            "sampel_kecil": d["partai"] < SAMPEL_KECIL,
+            "contoh_nama": [n for n, _ in nama[:2]],
+        })
+    # Paling sering kalah dulu; seri jumlah kalah -> persentase kalah lebih tinggi.
+    keluar.sort(key=lambda x: (-x["kalah"], -x["kalah_persen"], x["keluarga"]))
+    return {"pembukaan": keluar, "total": total, "lawan": lawan, "format": format_ or "semua",
+            "sampel_kecil_di_bawah": SAMPEL_KECIL}
+
+
+@router.get("/kekalahan/pembukaan", summary="Pembukaan yang paling sering kalah melawan lawan kuat")
+def api_pembukaan_kalah(pemain_id: list[int] = Query(..., description="id akun sendiri, boleh beberapa"),
+                        format: str | None = None,
+                        lawan: str = "gmim"):
+    if lawan not in LAWAN_VALID:
+        raise HTTPException(status_code=422,
+                            detail=f"lawan harus salah satu dari: {', '.join(LAWAN_VALID)}")
+    conn = koneksi()
+    try:
+        return pembukaan_kalah(conn, pemain_id, format, lawan)
+    finally:
+        conn.close()
 
 
 @router.get("/kekalahan", summary="Partai kalah beserta sebabnya")

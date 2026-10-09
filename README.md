@@ -30,7 +30,9 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   Stockfish WASM di browser; hasilnya divalidasi terhadap engine laptop.
 - **Latihan dari kekalahan sendiri** — partai yang kalah diprioritaskan dan
   dicari sebabnya (habis waktu, miss-click, atau blunder sungguhan), dipisah
-  per format bullet/blitz/rapid/klasik.
+  per format bullet/blitz/rapid/klasik. Halaman yang sama merangkum pembukaan
+  yang paling sering kalah melawan lawan kuat (bisa disaring GM/IM saja), per
+  warna, dengan tanda sampel kecil.
 - **Halaman pemain** — rating, skor sebagai Putih/Hitam, pembukaan per ECO.
 - **Tebak langkah GM** — main sebagai GM di partai aslinya; tiap langkah dinilai
   sama dengan GM, beda tapi tetap bagus menurut engine, atau meleset.
@@ -54,7 +56,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Batas arsitektur yang dijaga:** frontend hanya lewat `/api/...`, modul impor
   tidak tahu soal HTTP, `app/main.py` bebas SQL (dijaga tes arsitektur).
 - **Tanpa framework frontend dan tanpa CDN** — aplikasi jalan penuh tanpa internet.
-- **861 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+- **873 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
   jaringan lokal dan tes halaman di peramban headless yang dijalankan CI.
 
 ## Tech stack
