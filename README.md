@@ -25,7 +25,9 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   akurasi, turning point, grafik evaluasi, eval bar di papan.
 - **Papan analisis tanpa henti** — tombol Terus mengalirkan garis Stockfish
   (SSE) dengan depth yang terus naik; engine server tetap satu dan dilepas
-  dalam ~0,1 detik begitu dihentikan atau posisinya berubah.
+  dalam ~0,1 detik begitu dihentikan atau posisinya berubah. Bisa juga memakai
+  engine di perangkat ini (Stockfish WASM di browser) dengan bentuk jawaban yang
+  sama dengan API server, jadi tampilan papan tidak tahu engine mana yang menjawab.
 - **Antrean analisis** — batch Stockfish berjalan sebagai proses terpisah,
   dibatasi slot dan profil RAM supaya laptop tetap bisa dipakai; bisa dijeda
   dan dilanjutkan setelah komputer mati.

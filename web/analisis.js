@@ -7,8 +7,10 @@
    chessboard.js tidak bisa mengubah sparePieces saat hidup, jadi ganti mode =
    papan dibangun ulang.
 
-   Engine dipanggil lewat GET /api/evaluasi (kontrak: SESI.md Permintaan API #4).
-   Frontend tidak pernah menjalankan engine sendiri. */
+   Engine dipanggil lewat GET /api/evaluasi (kontrak: SESI.md Permintaan API #4),
+   atau — kalau Ray memilih "Engine: perangkat ini" (9 Okt 2026) — lewat
+   web/engine-browser.js, Stockfish WASM di browser yang mengembalikan bentuk
+   JSON yang sama. Terus (aliran) hanya untuk engine laptop. */
 
 (function () {
   "use strict";
@@ -49,8 +51,13 @@
     otomatis: document.getElementById("otomatis"),
     multipv: document.getElementById("multipv"),
     depth: document.getElementById("depth"),
-    terus: document.getElementById("terus")
+    terus: document.getElementById("terus"),
+    engine: document.getElementById("engine")
   };
+
+  var KUNCI_ENGINE = "catur.analisis.engine";   // pilihan engine, per perangkat
+
+  function engineBrowser() { return el.engine.value === "browser"; }
 
   /* ---------- util ---------- */
 
@@ -310,7 +317,7 @@
 
   function pesanGagal(status, body) {
     var detail = body && body.detail ? String(body.detail) : "";
-    if (status === 409) return "Engine sedang dipakai. Coba lagi sebentar.";
+    if (status === 409) return "Engine laptop sedang dipakai. Coba lagi sebentar, atau pilih Engine: perangkat ini.";
     if (status === 422) return "Posisi ditolak server: " + (detail || "FEN tidak sah");
     if (status === 503) return "Engine tidak tersedia di server.";
     if (status === 404) return "Endpoint /api/evaluasi belum ada.";
@@ -328,6 +335,21 @@
     if (permintaan) permintaan.abort();
     permintaan = new AbortController();
     var sinyal = permintaan.signal;
+
+    if (engineBrowser()) {
+      statusEngine("Mengevaluasi di perangkat ini…");
+      el.analisa.disabled = true;
+      EngineBrowser.evaluasi(fen, { multipv: el.multipv.value, depth: el.depth.value, signal: sinyal })
+        .then(function (body) { tampilkanHasil(body, fen); })
+        .catch(function (e) {
+          if (e.name === "AbortError") return;
+          statusEngine(e.message, true);
+        })
+        .then(function () {
+          if (permintaan && permintaan.signal === sinyal) { permintaan = null; el.analisa.disabled = false; }
+        });
+      return;
+    }
 
     var u = new URL("/api/evaluasi", window.location.origin);
     u.searchParams.set("fen", fen);
@@ -384,6 +406,7 @@
 
   function analisisTerus() {
     if (fenTerus !== null) { hentikanTerus(); statusEngine("Dihentikan."); return; }
+    if (engineBrowser()) return;
     var fen = fenSekarang();
     var masalah = alasanTidakSah(fen);
     if (masalah) { statusEngine("Tidak dievaluasi · " + masalah, true); return; }
@@ -642,6 +665,19 @@
 
   el.analisa.addEventListener("click", evaluasi);
   el.terus.addEventListener("click", analisisTerus);
+  /* Terus memakai aliran server; engine browser cukup Analisa/Otomatis. */
+  function terapkanEngine() {
+    if (engineBrowser()) hentikanTerus();
+    el.terus.disabled = engineBrowser();
+    el.terus.title = engineBrowser()
+      ? "Terus hanya untuk Engine: laptop"
+      : "Analisis tanpa henti: engine berpikir makin dalam sampai dihentikan, posisi berubah, depth 30, atau 2 menit";
+  }
+  el.engine.addEventListener("change", function () {
+    try { localStorage.setItem(KUNCI_ENGINE, el.engine.value); } catch (e) { /* mode privat */ }
+    terapkanEngine();
+    if (el.otomatis.checked) evaluasi();
+  });
   el.multipv.addEventListener("change", function () { if (el.otomatis.checked) evaluasi(); });
   el.depth.addEventListener("change", function () { if (el.otomatis.checked) evaluasi(); });
 
@@ -664,6 +700,12 @@
   buatPapan("start");
   var parameter = new URLSearchParams(window.location.search);
   var fenUrl = parameter.get("fen");
+
+  /* ?engine=browser|server menang atas pilihan tersimpan (dipakai tes headless). */
+  var engineAwal = parameter.get("engine");
+  if (!engineAwal) { try { engineAwal = localStorage.getItem(KUNCI_ENGINE); } catch (e) { engineAwal = null; } }
+  if (engineAwal === "browser" || engineAwal === "server") el.engine.value = engineAwal;
+  terapkanEngine();
 
   /* Kait pengujian tanpa mouse (dipakai Chrome headless): ?uji_klik=e2,e4,g8,f6
      menjalankan klik kotak berurutan. Tidak berpengaruh kalau parameter tidak ada. */

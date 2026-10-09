@@ -100,6 +100,12 @@
           <button id="terus" title="Analisis tanpa henti: engine berpikir makin dalam sampai dihentikan, posisi berubah, depth 30, atau 2 menit">Terus</button>
         </div>
         <div class="engine-atur">
+          <label title="Laptop = Stockfish penuh di server. Perangkat ini = Stockfish WASM di browser (pakai prosesor HP/tablet ini, tidak antre dengan batch di laptop; lebih lemah, tanpa Terus)">Engine
+            <select id="engine">
+              <option value="server" selected>laptop</option>
+              <option value="browser">perangkat ini</option>
+            </select>
+          </label>
           <label class="centang" title="Evaluasi ulang setiap posisi berubah"><input type="checkbox" id="otomatis" checked> Otomatis</label>
           <label>Garis
             <select id="multipv">
@@ -134,6 +140,7 @@
 <script src="/static/vendor/chess.js"></script>
 <script src="/static/pilih-promosi.js"></script>
 <script src="/static/klik-papan.js"></script>
+<script src="/static/engine-browser.js"></script>
 <script src="/static/analisis.js"></script>
 <script src="/static/simpan-posisi.js"></script>
 </body>
