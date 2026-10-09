@@ -17,13 +17,16 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from app import tanya_db
 from app.tanya_db import (
     BATAS_BARIS,
     SqlDitolak,
     _buka_ro,
     bangun_prompt,
     jalankan_sql,
+    kalimat_jawaban,
     periksa_sql,
     peringatan_hasil,
     skema_untuk_prompt,
@@ -390,6 +393,109 @@ class TesTanyaTanpaLlm(unittest.TestCase):
     def test_batas_bawaan_masuk_akal(self):
         self.assertGreater(BATAS_BARIS, 0)
         self.assertLessEqual(BATAS_BARIS, 1000)
+
+
+class TesKalimatJawaban(unittest.TestCase):
+    """Kalimat disusun templat dari baris yang sama — angka tidak boleh berubah."""
+
+    def test_satu_nilai(self):
+        self.assertEqual(kalimat_jawaban(["jumlah_partai"], [[272470]]),
+                         "Jumlah partai: 272.470.")
+
+    def test_desimal_cara_indonesia(self):
+        self.assertEqual(kalimat_jawaban(["rata_akurasi"], [[1234.5678]]),
+                         "Rata akurasi: 1.234,57.")
+
+    def test_satu_baris_banyak_kolom(self):
+        k = kalimat_jawaban(["nama", "partai"], [["Carlsen, Magnus", 3051]])
+        self.assertEqual(k, "Satu baris: nama Carlsen, Magnus, partai 3.051.")
+
+    def test_banyak_baris_tidak_mengaku_teratas(self):
+        baris = [[f"s{i}", i] for i in range(7)]
+        k = kalimat_jawaban(["sumber", "jumlah"], baris)
+        self.assertTrue(k.startswith("7 baris. 5 baris pertama (urutan dari SQL): "))
+        self.assertIn("s0 (jumlah 0)", k)
+        self.assertNotIn("s5", k)
+        self.assertNotIn("teratas", k.lower())
+
+    def test_terpotong_ditandai(self):
+        self.assertTrue(kalimat_jawaban(["x"], [[1], [2]], terpotong=True).startswith("2+ baris"))
+
+    def test_kosong_tanpa_kalimat(self):
+        self.assertIsNone(kalimat_jawaban(["x"], []))
+        self.assertEqual(kalimat_jawaban(["x"], [[None]]), "X: kosong.")
+
+
+class TesCache(unittest.TestCase):
+    """Cache menyimpan SQL, bukan hasil: LLM tidak dipanggil ulang, angka tetap segar."""
+
+    SQL = "SELECT COUNT(*) AS jumlah FROM partai"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = _db_contoh(Path(self.tmp.name))
+        tanya_db.kosongkan_cache()
+        self.addCleanup(tanya_db.kosongkan_cache)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_pertanyaan_sama_tidak_memanggil_llm_lagi(self):
+        with mock.patch.object(tanya_db.llm, "panggil", return_value=self.SQL) as p:
+            a = tanya("Berapa partai?", db=self.db)
+            b = tanya("  berapa   PARTAI ", db=self.db)
+        self.assertEqual(p.call_count, 1)
+        self.assertFalse(a["dari_cache"])
+        self.assertTrue(b["dari_cache"])
+        self.assertEqual(b["kalimat"], "Jumlah: 3.")
+
+    def test_hasil_dibaca_ulang_bukan_disimpan(self):
+        with mock.patch.object(tanya_db.llm, "panggil", return_value=self.SQL):
+            self.assertEqual(tanya("berapa partai", db=self.db)["baris"], [[3]])
+            con = sqlite3.connect(self.db)
+            con.execute("INSERT INTO partai (id, hasil) VALUES (4, '1-0')")
+            con.commit()
+            con.close()
+            self.assertEqual(tanya("berapa partai", db=self.db)["baris"], [[4]])
+
+    def test_sql_cache_yang_rusak_dibuang_lalu_tanya_ulang(self):
+        kunci = (tanya_db._kunci_pertanyaan("berapa partai"), tanya_db.MODEL_BAWAAN,
+                 str(self.db.resolve()))
+        tanya_db._cache_sql[kunci] = "SELECT kolom_hilang FROM partai"
+        with mock.patch.object(tanya_db.llm, "panggil", return_value=self.SQL) as p:
+            h = tanya("berapa partai", db=self.db)
+        self.assertEqual(p.call_count, 1)
+        self.assertFalse(h["dari_cache"])
+        self.assertEqual(tanya_db._cache_sql[kunci], self.SQL)
+
+    def test_sql_ditolak_tidak_masuk_cache(self):
+        with mock.patch.object(tanya_db.llm, "panggil", return_value="DELETE FROM partai"):
+            with self.assertRaises(SqlDitolak):
+                tanya("hapus", db=self.db)
+        self.assertEqual(len(tanya_db._cache_sql), 0)
+
+    def test_model_berbeda_tidak_berbagi_cache(self):
+        with mock.patch.object(tanya_db.llm, "panggil", return_value=self.SQL) as p:
+            tanya("berapa partai", db=self.db)
+            tanya("berapa partai", db=self.db, model="qwen2.5-coder:3b")
+        self.assertEqual(p.call_count, 2)
+
+    def test_cache_dibatasi(self):
+        with mock.patch.object(tanya_db, "BATAS_CACHE_SQL", 3), \
+             mock.patch.object(tanya_db.llm, "panggil", return_value=self.SQL):
+            for i in range(5):
+                tanya(f"pertanyaan {i}", db=self.db)
+        self.assertEqual(len(tanya_db._cache_sql), 3)
+
+    def test_skema_tidak_dihitung_ulang_dalam_umurnya(self):
+        with mock.patch.object(tanya_db, "_bangun_skema", return_value="partai (3 baris)") as b:
+            skema_untuk_prompt(self.db)
+            skema_untuk_prompt(self.db)
+        self.assertEqual(b.call_count, 1)
+        with mock.patch.object(tanya_db, "_bangun_skema", return_value="x") as b, \
+             mock.patch.object(tanya_db, "UMUR_SKEMA_DETIK", 0):
+            skema_untuk_prompt(self.db)
+        self.assertEqual(b.call_count, 1)
 
 
 if __name__ == "__main__":

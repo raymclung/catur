@@ -310,6 +310,21 @@ tanpa error. Saringannya sama dengan backfill: kedua pemain Elo >= 2500, partai
 online dibuang (`--min-elo` untuk mengubah). Log di `data/laporan/log-perbarui-*.txt`.
 Jangan dijalankan bersamaan dengan `analisis_partai.py`.
 
+## FIDE ID dan gelar untuk pemain tanpa ID
+
+PGN Mentor dan PGN lama tidak membawa FIDE ID, jadi gelarnya kosong. Daftar
+pemain resmi FIDE (unduhan publik bulanan, 45 MB) bisa mengisinya lewat nama,
+dengan pagar ketat (nama unik, umur masuk akal, Elo sejalan dengan gelar —
+lihat docstring skripnya):
+
+```
+curl --create-dirs -A "catur-analysis/0.1" -o data/fide/players_list.zip https://ratings.fide.com/download/players_list.zip
+python cocokkan_fide.py data/fide/players_list.zip            # lihat saja + laporan TSV
+python cocokkan_fide.py data/fide/players_list.zip --jalan    # tulis (cadangan dulu)
+```
+
+Menjalankan ulang aman: pemain yang sudah ber-ID dilewati.
+
 ## Cadangan database
 
 `data/catur.db` tidak masuk git, dan hasil analisis engine di dalamnya mahal

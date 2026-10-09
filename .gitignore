@@ -71,3 +71,8 @@ data/*.rusak-*
 
 # Klaim "partai ini sedang dianalisis" (analisis_partai.py), sementara
 data/klaim-analisis/
+
+# Daftar pemain resmi FIDE (cocokkan_fide.py); unduhan publik bulanan, 45 MB
+data/fide/
+# Laporan uji kering cocokkan_fide.py (yang --jalan tetap masuk git sebagai jejak)
+data/laporan/cocokkan-fide-*-lihat.tsv

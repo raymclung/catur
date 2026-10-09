@@ -38,7 +38,10 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   kelemahan yang terukur; repertoire bisa diunduh sebagai PGN untuk dihafal di
   Lichess Study atau HP.
 - **Tanya (opsional)** — pertanyaan bahasa biasa tentang isi database lewat LLM
-  lokal (Ollama), dengan kueri hanya-baca.
+  lokal (Ollama), dengan kueri hanya-baca. LLM hanya menulis SQL; jawabannya
+  dibacakan dari baris database lewat templat, jadi angkanya tidak dikarang.
+- **Gelar dari daftar resmi FIDE** — pemain tanpa FIDE ID dicocokkan lewat
+  nama dengan pagar umur dan Elo-vs-gelar (`cocokkan_fide.py`).
 
 ## Hal teknis yang menarik
 
@@ -51,7 +54,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Batas arsitektur yang dijaga:** frontend hanya lewat `/api/...`, modul impor
   tidak tahu soal HTTP, `app/main.py` bebas SQL (dijaga tes arsitektur).
 - **Tanpa framework frontend dan tanpa CDN** — aplikasi jalan penuh tanpa internet.
-- **830 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+- **861 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
   jaringan lokal dan tes halaman di peramban headless yang dijalankan CI.
 
 ## Tech stack

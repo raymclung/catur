@@ -14,6 +14,7 @@ Jalankan dari akar proyek:
     python -m unittest discover -s tests -v
 """
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -155,6 +156,43 @@ class Bertanya(unittest.TestCase):
         self.assertNotIn("model", t.call_args.kwargs)
 
 
+class Panaskan(unittest.TestCase):
+    """Memanaskan model boleh gagal, tapi tidak boleh jadi 5xx yang mematikan halaman."""
+
+    def test_ollama_mati_dikembalikan_sebagai_isi(self):
+        with mock.patch.object(tanya_db, "skema_untuk_prompt", return_value="x"), \
+             mock.patch.object(llm, "panaskan", side_effect=llm.LlmTidakAda("mati")):
+            d = tanya_web.panaskan()
+        self.assertFalse(d["siap"])
+        self.assertIn("mati", d["alasan"])
+
+    def test_berhasil_memuat_model_dan_skema(self):
+        with mock.patch.object(tanya_db, "skema_untuk_prompt", return_value="x") as s, \
+             mock.patch.object(llm, "panaskan", return_value=True) as p:
+            d = tanya_web.panaskan()
+        self.assertTrue(d["siap"])
+        s.assert_called_once()
+        p.assert_called_once()
+
+    def test_permintaan_ollama_tanpa_prompt_dan_menahan_model(self):
+        """Tanpa `prompt` = cara resmi Ollama memuat model tanpa menjawab."""
+        tertangkap = {}
+
+        class Jawab:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"{}"
+
+        def urlopen(req, timeout):
+            tertangkap["isi"] = json.loads(req.data.decode("utf-8"))
+            return Jawab()
+
+        with mock.patch.object(llm.urllib.request, "urlopen", urlopen):
+            self.assertTrue(llm.panaskan())
+        self.assertNotIn("prompt", tertangkap["isi"])
+        self.assertEqual(tertangkap["isi"]["keep_alive"], llm.TAHAN_MODEL)
+
+
 class Tersambung(unittest.TestCase):
     """Fitur yang tidak terdaftar di server/nav sama saja dengan tidak ada."""
 
@@ -165,6 +203,7 @@ class Tersambung(unittest.TestCase):
         jalur = aplikasi.openapi()["paths"]
         self.assertIn("/api/tanya", jalur)
         self.assertIn("/api/tanya/status", jalur)
+        self.assertIn("/api/tanya/panaskan", jalur)
 
     def test_halaman_tanya_ada_berkasnya(self):
         from app.main import FOLDER_WEB

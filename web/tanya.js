@@ -76,10 +76,28 @@
         matikanForm();
         return;
       }
-      el.keadaan.textContent = "Model " + d.model_bawaan + " siap di komputer ini.";
+      el.keadaan.textContent = "Model " + d.model_bawaan + " siap di komputer ini. Memuat ke memori…";
+      panaskan(d.model_bawaan);
     }).catch(function (e) {
       el.keadaan.textContent = "Keadaan Ollama tidak bisa dibaca: " + e.message;
       matikanForm();
+    });
+  }
+
+  /* Model 4,7 GB dimuat dari SSD selagi kamu mengetik, bukan sesudah Tanya
+     ditekan. Gagal di sini tidak fatal: pertanyaannya tetap bisa dikirim,
+     hanya lebih lambat, jadi form tidak dimatikan. */
+  function panaskan(model) {
+    ambilJson("/api/tanya/panaskan", { method: "POST" }).then(function (d) {
+      if (d.siap) {
+        el.keadaan.textContent = "Model " + model + " sudah di memori (" +
+          (d.durasi_ms / 1000).toFixed(1).replace(".", ",") + " s).";
+      } else {
+        el.keadaan.textContent = "Model " + model + " belum termuat: " + (d.alasan || "") +
+          " Pertanyaan pertama akan lebih lambat.";
+      }
+    }).catch(function () {
+      el.keadaan.textContent = "Model " + model + " siap di komputer ini.";
     });
   }
 
@@ -101,8 +119,11 @@
     el.peringatan.appendChild(kotak);
   }
 
-  function tampilTabel(kolom, baris, terpotong, jumlah) {
+  function tampilTabel(kolom, baris, terpotong, jumlah, kalimat) {
     kosongkan(el.isi);
+    /* Kalimatnya disusun templat di server dari baris yang sama, bukan oleh
+       model, jadi angkanya pasti sama dengan tabel di bawahnya. */
+    if (kalimat) el.isi.appendChild(buat("p", "kalimat-jawaban", kalimat));
     if (!baris.length) {
       el.isi.appendChild(buat("p", "kecil redup", "Tidak ada baris yang cocok."));
       return;
@@ -153,7 +174,13 @@
       el.kotakPeta.hidden = false;
       el.peta.textContent = d.peta || "";
     } else {
-      tampilTabel(d.kolom || [], d.baris || [], d.terpotong, d.jumlah || 0);
+      tampilTabel(d.kolom || [], d.baris || [], d.terpotong, d.jumlah || 0, d.kalimat);
+      if (typeof d.durasi_ms === "number") {
+        el.isi.appendChild(buat("p", "kecil redup",
+          (d.durasi_ms / 1000).toFixed(1).replace(".", ",") + " detik" +
+          (d.dari_cache ? " · SQL diambil dari pertanyaan yang sama sebelumnya; " +
+            "angkanya tetap dibaca ulang dari database" : "")));
+      }
       el.kotakSql.hidden = false;
       el.sql.textContent = d.sql || "";
       el.kotakPeta.hidden = true;

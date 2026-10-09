@@ -421,6 +421,7 @@
 
   var elMingguan = {
     status: document.getElementById("status-mingguan"),
+    twic: document.getElementById("status-twic"),
     tombol: document.getElementById("mulai-mingguan"),
     log: document.getElementById("log-mingguan")
   };
@@ -434,14 +435,17 @@
         elMingguan.status.className = "kecil";
       } else if (t) {
         var lama = d.hari_lalu === null ? "" : d.hari_lalu === 0 ? " (hari ini)" : " (" + d.hari_lalu + " hari lalu)";
-        elMingguan.status.textContent = "Terakhir " + t.selesai + lama + ": " + angka(t.baru) + " partai baru, " +
-          angka(t.dibuang) + " dibuang karena tidak ada pemain Elo 2500 ke atas, " +
+        elMingguan.status.textContent = "Broadcast terakhir " + t.selesai + lama + ": " + angka(t.baru) +
+          " partai baru, " + angka(t.dibuang) + " dibuang karena pemainnya di bawah saringan, " +
           angka(t.dianalisis_lichess) + " langsung dianalisis Lichess.";
         elMingguan.status.className = "kecil " + (d.hari_lalu >= 7 ? "slot-hampir" : "redup");
       } else {
         elMingguan.status.textContent = "Belum pernah diperbarui.";
         elMingguan.status.className = "kecil slot-hampir";
       }
+      elMingguan.twic.textContent = d.twic
+        ? "TWIC terakhir di database: edisi " + d.twic.edisi + " (diimpor " + d.twic.diimpor_pada.slice(0, 10) + ")."
+        : "TWIC belum pernah diimpor.";
       elMingguan.tombol.disabled = d.jalan;
       elMingguan.log.hidden = !(d.ekor_log && d.ekor_log.length) || !d.jalan;
       elMingguan.log.textContent = (d.ekor_log || []).join("\n");

@@ -296,5 +296,40 @@ class Broadcast(DasarImporWeb):
         self.assertEqual(c.exception.status_code, 422)
 
 
+class PembaruanMingguan(DasarImporWeb):
+    """
+    Tombol mingguan menarik TWIC juga (Ray, 9 Okt 2026): dulu hanya broadcast,
+    jadi TWIC sebulan tertinggal tanpa ada yang melihatnya.
+    """
+
+    def test_tombol_menjalankan_perbarui_lengkap(self):
+        # Tanpa --hanya: semua tahap, termasuk cadangan sebelum menulis dan TWIC.
+        self.assertEqual(impor_web.PERINTAH_MINGGUAN, ["perbarui.py"])
+        self.assertTrue((AKAR / impor_web.PERINTAH_MINGGUAN[0]).is_file())
+
+    def test_twic_terakhir_kosong(self):
+        conn = self.db()
+        self.assertIsNone(impor_web.twic_terakhir(conn))
+        conn.close()
+
+    def test_twic_terakhir_urut_angka_dan_hanya_yang_selesai(self):
+        conn = self.db()
+        # "999" < "1665" sebagai angka tapi > sebagai teks: urutan harus angka.
+        catat(conn, "twic", "999", "TWIC 999", None, 10, 5, 5)
+        catat(conn, "twic", "1665", "TWIC 1665", None, 10, 5, 3)
+        catat(conn, "twic", "1666", "TWIC 1666", None, 10, 5, 0, selesai=False)
+        catat(conn, "lichess-broadcast", "99999", "ronde", None, 1, 1, 1)
+        hasil = impor_web.twic_terakhir(conn)
+        conn.close()
+        self.assertEqual(hasil["edisi"], 1665)
+        self.assertEqual(hasil["baru"], 3)
+
+    def test_status_memuat_twic(self):
+        conn = self.db()
+        catat(conn, "twic", "1665", "TWIC 1665", None, 10, 5, 3)
+        conn.close()
+        self.assertEqual(impor_web.status_mingguan()["twic"]["edisi"], 1665)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -83,7 +83,7 @@ HALAMAN = (
     ("/ringkasan", ("dari 2 (50%)",)),
     # Kalimat keadaan Ollama berbeda di tiap komputer (di CI tidak ada Ollama),
     # tapi ketiganya ditulis tanya.js ke tempat yang sama setelah /api/tanya/status.
-    ("/tanya", ("siap di komputer ini", "Ollama tidak berjalan", "Ollama berjalan tapi model")),
+    ("/tanya", ("siap di komputer ini", "sudah di memori", "belum termuat", "Ollama tidak berjalan", "Ollama berjalan tapi model")),
     ("/static/tersimpan.html", ("Belum ada yang disimpan",)),
     # Halaman pembantu tidak memanggil API sebelum Mulai; ?uji_mulai=1 tanpa
     # kode berhenti di pemeriksaan kode — cukup untuk membuktikan JS-nya

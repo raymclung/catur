@@ -33,6 +33,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 
 from . import llm
@@ -46,6 +49,17 @@ MODEL_BAWAAN = llm.MODEL
 BATAS_BARIS = 200
 TIMEOUT_LLM = llm.TIMEOUT
 TIMEOUT_SQL_MS = 15_000
+
+# Skema untuk prompt dihitung ulang paling cepat tiap 10 menit. Diukur 9 Okt
+# 2026: `COUNT(*)` atas analisis_langkah (23,9 juta baris) makan 9,4 detik
+# saat cache disk dingin — separuh dari waktu tunggu satu pertanyaan, padahal
+# angka baris itu hanya petunjuk ukuran untuk LLM, bukan jawaban.
+UMUR_SKEMA_DETIK = 600
+
+# SQL yang sudah terbukti jalan untuk pertanyaan yang sama. Yang disimpan
+# SQL-nya, BUKAN hasilnya: hasil selalu dibaca ulang dari database, jadi
+# angkanya tetap benar sesudah impor baru. Yang dihemat hanya waktu LLM.
+BATAS_CACHE_SQL = 200
 
 # Tabel yang boleh dibaca. `posisi` (9,4 juta baris) sengaja tidak disertakan:
 # pertanyaan bebas yang menyentuhnya hampir selalu berakhir jadi pemindaian
@@ -105,7 +119,38 @@ def _buka_ro(db: Path) -> sqlite3.Connection:
     return con
 
 
+_kunci_cache = threading.Lock()
+_cache_skema: dict[str, tuple[float, str]] = {}
+_cache_sql: "OrderedDict[tuple[str, str, str], str]" = OrderedDict()
+
+
+def kosongkan_cache() -> None:
+    """Untuk tes, dan kalau skema database berubah saat server hidup."""
+    with _kunci_cache:
+        _cache_skema.clear()
+        _cache_sql.clear()
+
+
 def skema_untuk_prompt(db: Path = DB_BAWAAN) -> str:
+    """Skema tabel yang diizinkan, dari cache kalau umurnya < 10 menit.
+
+    Risiko yang diterima: jumlah baris di prompt bisa tertinggal sampai 10
+    menit. Angka itu hanya memberi LLM gambaran ukuran tabel; jawaban ke Ray
+    tetap dihitung dari database saat itu juga.
+    """
+    kunci = str(Path(db).resolve())
+    sekarang = time.monotonic()
+    with _kunci_cache:
+        simpanan = _cache_skema.get(kunci)
+    if simpanan and sekarang - simpanan[0] < UMUR_SKEMA_DETIK:
+        return simpanan[1]
+    skema = _bangun_skema(db)
+    with _kunci_cache:
+        _cache_skema[kunci] = (sekarang, skema)
+    return skema
+
+
+def _bangun_skema(db: Path) -> str:
     """Skema tabel yang diizinkan, dibaca dari database itu sendiri.
 
     Dibaca lewat PRAGMA, tidak ditulis ulang sebagai teks di berkas ini:
@@ -276,19 +321,104 @@ def tanya(pertanyaan: str, *, model: str = MODEL_BAWAAN, host: str = HOST_OLLAMA
     """
     if not (pertanyaan or "").strip():
         raise SqlDitolak("Pertanyaan kosong.")
-    mentah = minta_sql(pertanyaan, model=model, host=host, db=db)
-    sql = periksa_sql(mentah)
-    kolom, baris = jalankan_sql(sql, db=db, batas=batas)
+    mulai = time.monotonic()
+    kunci = (_kunci_pertanyaan(pertanyaan), model, str(Path(db).resolve()))
+    with _kunci_cache:
+        sql = _cache_sql.get(kunci)
+    dari_cache = sql is not None
+    hasil = None
+    if dari_cache:
+        try:
+            hasil = jalankan_sql(sql, db=db, batas=batas)
+        except SqlDitolak:
+            # SQL lama tidak jalan lagi (skema berubah): buang, tanya LLM ulang.
+            with _kunci_cache:
+                _cache_sql.pop(kunci, None)
+            dari_cache = False
+    if hasil is None:
+        sql = periksa_sql(minta_sql(pertanyaan, model=model, host=host, db=db))
+        hasil = jalankan_sql(sql, db=db, batas=batas)
+    kolom, baris = hasil
+    # Hanya SQL yang lolos pemeriksaan DAN jalan yang disimpan.
+    with _kunci_cache:
+        _cache_sql[kunci] = sql
+        _cache_sql.move_to_end(kunci)
+        while len(_cache_sql) > BATAS_CACHE_SQL:
+            _cache_sql.popitem(last=False)
+    terpotong = len(baris) >= batas
     return {
         "pertanyaan": pertanyaan,
         "sql": sql,
         "kolom": kolom,
         "baris": baris,
         "jumlah": len(baris),
-        "terpotong": len(baris) >= batas,
+        "terpotong": terpotong,
         "model": model,
         "peringatan": peringatan_hasil(sql, baris),
+        "kalimat": kalimat_jawaban(kolom, baris, terpotong),
+        "dari_cache": dari_cache,
+        "durasi_ms": int((time.monotonic() - mulai) * 1000),
     }
+
+
+def _kunci_pertanyaan(pertanyaan: str) -> str:
+    """'Berapa partai  per sumber?' dan 'berapa partai per sumber' = sama."""
+    return " ".join(pertanyaan.lower().split()).rstrip("?.! ")
+
+
+def _nilai_teks(nilai) -> str:
+    """Angka ditulis cara Indonesia (272.470; 54,32); nilai lain apa adanya."""
+    if nilai is None:
+        return "kosong"
+    if isinstance(nilai, bool):
+        return str(nilai)
+    if isinstance(nilai, int):
+        return f"{nilai:,}".replace(",", ".")
+    if isinstance(nilai, float):
+        if nilai.is_integer() and abs(nilai) < 1e15:
+            return _nilai_teks(int(nilai))
+        return f"{nilai:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    return str(nilai)
+
+
+def _nama_kolom(kolom: str) -> str:
+    return kolom.replace("_", " ").strip()
+
+
+def kalimat_jawaban(kolom: list[str], baris: list[list],
+                    terpotong: bool = False, contoh: int = 5) -> str | None:
+    """Hasil SQL dibacakan sebagai kalimat — lewat templat, BUKAN LLM.
+
+    Kenapa bukan LLM: model yang sama yang kadang salah menulis SQL juga bisa
+    salah menyalin angka, dan kalimatnya akan terdengar meyakinkan. Templat
+    hanya menyalin nilai dari baris apa adanya, jadi tiap angka di kalimat
+    sama persis dengan yang ada di tabel. Tidak menambah waktu tunggu.
+
+    Batas yang diterima: kalimatnya kaku, nama kolom diambil dari alias SQL,
+    dan urutan "baris pertama" adalah urutan SQL — kalau SQL-nya tidak
+    memakai ORDER BY, itu bukan berarti "teratas".
+    """
+    if not baris or not kolom:
+        return None
+    if len(baris) == 1:
+        r = baris[0]
+        if len(kolom) == 1:
+            return f"{_nama_kolom(kolom[0]).capitalize()}: {_nilai_teks(r[0])}."
+        bagian = [f"{_nama_kolom(k)} {_nilai_teks(v)}" for k, v in zip(kolom, r)]
+        return "Satu baris: " + ", ".join(bagian) + "."
+
+    def satu(r):
+        if len(kolom) == 1:
+            return _nilai_teks(r[0])
+        lain = ", ".join(f"{_nama_kolom(k)} {_nilai_teks(v)}"
+                         for k, v in zip(kolom[1:], r[1:]))
+        return f"{_nilai_teks(r[0])} ({lain})"
+
+    jumlah = f"{len(baris)}+" if terpotong else str(len(baris))
+    awal = "; ".join(satu(r) for r in baris[:contoh])
+    if len(baris) <= contoh:
+        return f"{jumlah} baris: {awal}."
+    return f"{jumlah} baris. {contoh} baris pertama (urutan dari SQL): {awal}."
 
 
 def peringatan_hasil(sql: str, baris: list) -> list[str]:
