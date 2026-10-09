@@ -42,6 +42,12 @@ MODEL = "qwen2.5-coder:7b"
 
 TIMEOUT = 120
 
+# Berapa lama Ollama menahan model di RAM sesudah dipakai. Bawaan Ollama 5
+# menit; dinaikkan ke 10 supaya pertanyaan susulan tidak menunggu model 4,7 GB
+# dimuat ulang dari SSD. Tidak lebih lama dari itu: RAM laptop ini juga
+# dipakai batch engine, dan model yang menganggur memakan jatah mereka.
+TAHAN_MODEL = "10m"
+
 
 class LlmTidakAda(RuntimeError):
     """Ollama tidak menjawab di host yang diminta (jadi HTTP 503)."""
@@ -60,6 +66,7 @@ def panggil(prompt: str, *, model: str = MODEL, host: str = HOST,
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": TAHAN_MODEL,
         "options": {"temperature": temperature, "num_predict": num_predict},
     }).encode("utf-8")
     permintaan = urllib.request.Request(
@@ -82,6 +89,27 @@ def panggil(prompt: str, *, model: str = MODEL, host: str = HOST,
             f"pakai model yang lebih kecil atau naikkan timeout."
         ) from e
     return isi.get("response", "")
+
+
+def panaskan(*, model: str = MODEL, host: str = HOST, timeout: int = TIMEOUT) -> bool:
+    """Muat model ke RAM tanpa membuat jawaban apa pun.
+
+    Permintaan `/api/generate` tanpa `prompt` adalah cara resmi Ollama untuk
+    memuat model. Dipanggil halaman Tanya saat dibuka, jadi waktu memuat
+    model dari SSD habis selagi Ray mengetik, bukan sesudah ia menekan Tanya.
+    Kembalikan True kalau Ollama menjawab.
+    """
+    muatan = json.dumps({"model": model, "keep_alive": TAHAN_MODEL}).encode("utf-8")
+    permintaan = urllib.request.Request(
+        f"{host.rstrip('/')}/api/generate", data=muatan,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(permintaan, timeout=timeout) as jawab:
+            jawab.read()
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise LlmTidakAda(f"Ollama tidak menjawab di {host} ({e}).") from e
+    return True
 
 
 def model_tersedia(*, host: str = HOST, timeout: int = 10) -> list[str]:

@@ -359,8 +359,27 @@ def impor_broadcast(masukan: UnggahBroadcast):
 # Pekerjaannya bisa belasan menit (puluhan turnamen, jeda 1,5 detik per
 # permintaan ke Lichess), jadi dijalankan sebagai proses lepas seperti batch
 # analisis, dan halaman membaca log-nya.
+#
+# Sejak 9 Okt 2026 tombol ini menjalankan perbarui.py LENGKAP, bukan hanya
+# impor_broadcast.py. Ray: "masih 0 partai dari twic ... perlu ada fitur pull
+# data dari sana" — TWIC sebulan tertinggal karena hanya bisa lewat terminal.
+# Satu tombol = perintah mingguan yang sama dengan CLI: cadangan dulu (jalan
+# mundur sebelum menulis), ekspor inti ke cloud, TWIC, broadcast, indeks.
+# Saringan broadcast-nya tetap sama (perbarui.py meneruskan tier 4, 10 hari,
+# Elo bintang 2400), dan pembaruan-broadcast.json tetap ditulis impor_broadcast.
 
-ARGUMEN_MINGGUAN = ["--resmi", "--tier", "4", "--hari", "10", "--min-elo-bintang", "2400"]
+PERINTAH_MINGGUAN = ["perbarui.py"]
+
+
+def twic_terakhir(conn: sqlite3.Connection) -> dict | None:
+    """Edisi TWIC terbaru yang sudah selesai diimpor, supaya ketinggalan kelihatan di halaman."""
+    baris = conn.execute(
+        "SELECT kunci, diimpor_pada, jumlah_baru FROM sumber_impor "
+        "WHERE jenis = 'twic' AND selesai = 1 ORDER BY CAST(kunci AS INTEGER) DESC LIMIT 1"
+    ).fetchone()
+    if baris is None:
+        return None
+    return {"edisi": int(baris[0]), "diimpor_pada": baris[1], "baru": baris[2]}
 
 
 def _berkas_mingguan():
@@ -370,7 +389,7 @@ def _berkas_mingguan():
             akar / "data" / "proses-broadcast-mingguan.json")
 
 
-@router.get("/mingguan", summary="Status pembaruan partai GM terkenal dari broadcast Lichess")
+@router.get("/mingguan", summary="Status pembaruan mingguan partai GM (TWIC + broadcast Lichess)")
 def status_mingguan():
     import json
     from datetime import datetime
@@ -394,13 +413,19 @@ def status_mingguan():
     ekor = []
     if log.is_file():
         ekor = [b for b in log.read_text(encoding="utf-8", errors="replace").splitlines() if b.strip()][-12:]
+    conn = koneksi()
+    try:
+        twic = twic_terakhir(conn)
+    finally:
+        conn.close()
     return {"jalan": jalan, "mulai": p.get("mulai") if jalan else None, "terakhir": terakhir,
-            "hari_lalu": hari_lalu, "ekor_log": ekor,
-            "aturan": "salah satu pemain Elo >= 2500 atau bergelar GM; turnamen resmi Lichess "
-                      "tier 4-5 yang berlangsung dalam 10 hari terakhir"}
+            "hari_lalu": hari_lalu, "ekor_log": ekor, "twic": twic,
+            "aturan": "TWIC edisi baru: kedua pemain Elo >= 2500, partai online dibuang; "
+                      "broadcast: salah satu pemain Elo >= 2400 atau bergelar GM/WGM, turnamen resmi "
+                      "Lichess tier 4-5 yang berlangsung dalam 10 hari terakhir"}
 
 
-@router.post("/mingguan", summary="Jalankan pembaruan partai GM terkenal sekarang")
+@router.post("/mingguan", summary="Jalankan pembaruan mingguan sekarang (perbarui.py: cadangan, TWIC, broadcast, indeks)")
 def mulai_mingguan():
     import json
     import os
@@ -418,7 +443,7 @@ def mulai_mingguan():
     bendera = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
                | subprocess.BELOW_NORMAL_PRIORITY_CLASS) if os.name == "nt" else 0
     with log.open("w", encoding="utf-8") as fh:
-        p = subprocess.Popen([sys.executable, "-X", "utf8", "-u", "impor_broadcast.py", *ARGUMEN_MINGGUAN],
+        p = subprocess.Popen([sys.executable, "-X", "utf8", "-u", *PERINTAH_MINGGUAN],
                              cwd=str(akar), stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              creationflags=bendera, close_fds=True)
     proses.write_text(json.dumps({"pid": p.pid, "mulai": datetime.now().strftime("%Y-%m-%d %H:%M")}),

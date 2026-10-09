@@ -117,13 +117,16 @@
         </div>
 
         <div class="baris-pisah" style="margin-top:14px;padding-top:12px">
-          <strong>Partai GM terkenal minggu ini</strong>
+          <strong>Partai GM minggu ini (TWIC + broadcast Lichess)</strong>
           <div class="kecil redup" style="margin-top:4px">
-            Membaca sendiri semua turnamen resmi Lichess 10 hari terakhir (termasuk
-            bagian-bagiannya, mis. Candidates Open/Women) dan hanya menyimpan partai
-            pemain kuat: salah satu pemain Elo ≥ 2500, atau bergelar GM (berapa pun ratingnya).
-            Jalankan seminggu sekali.
+            Satu klik menjalankan pembaruan mingguan lengkap: cadangan database dulu,
+            lalu <strong>TWIC</strong> edisi yang belum ada (theweekinchess.com, terbit
+            tiap Senin; kedua pemain Elo ≥ 2500, partai online dibuang), lalu semua
+            turnamen resmi Lichess 10 hari terakhir (salah satu pemain Elo ≥ 2400 atau
+            bergelar GM/WGM), lalu indeks posisi. Partai yang sudah ada dari sumber lain
+            ditolak sebagai duplikat. Jalankan seminggu sekali; bisa ±15 menit.
           </div>
+          <div class="kecil" id="status-twic" style="margin-top:4px"></div>
           <div class="alat" style="margin-top:8px">
             <span class="kecil" id="status-mingguan">memuat…</span>
             <button type="button" id="mulai-mingguan">Perbarui sekarang</button>

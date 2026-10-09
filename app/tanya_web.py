@@ -7,6 +7,7 @@ dan nav `web/`, jadi penyambungannya ditunda — dan tertunda 13 hari. Akibatnya
 fitur yang utuh, berikut 48 tesnya, tidak bisa dipakai Ray sama sekali.
 
     GET  /api/tanya/status   Ollama hidup? model apa yang ada?
+    POST /api/tanya/panaskan muat model + skema sebelum pertanyaan pertama
     POST /api/tanya          { pertanyaan, mode, model? }
 
 Dua mode, karena pertanyaannya dua jenis yang berbeda sifatnya:
@@ -26,6 +27,9 @@ menunggu semenit. Dengan ini, keadaannya terbaca sebelum Ray mengetik.
 """
 
 from __future__ import annotations
+
+import sqlite3
+import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -60,6 +64,28 @@ def status() -> dict:
         # dan halaman perlu bisa membedakannya untuk memberi saran yang benar.
         "siap": llm.MODEL in model,
     }
+
+
+@router.post("/panaskan")
+def panaskan() -> dict:
+    """Muat model dan siapkan skema selagi Ray masih mengetik.
+
+    Dipanggil halaman Tanya sekali saat dibuka. Tanpa ini, pertanyaan pertama
+    menanggung dua waktu tunggu yang tidak ada hubungannya dengan
+    pertanyaannya: memuat model 4,7 GB dari SSD, dan menghitung baris tabel
+    untuk skema (9,4 detik saat cache disk dingin, diukur 9 Okt 2026).
+    Gagal memanaskan tidak fatal: pertanyaan berikutnya tetap jalan, hanya
+    lebih lambat, jadi kesalahan dikembalikan sebagai isi, bukan 5xx.
+    """
+    mulai = time.monotonic()
+    try:
+        tanya_db.skema_untuk_prompt()
+        llm.panaskan()
+    except (llm.LlmTidakAda, OSError, sqlite3.Error) as e:
+        return {"siap": False, "alasan": str(e),
+                "durasi_ms": int((time.monotonic() - mulai) * 1000)}
+    return {"siap": True, "alasan": None,
+            "durasi_ms": int((time.monotonic() - mulai) * 1000)}
 
 
 @router.post("")

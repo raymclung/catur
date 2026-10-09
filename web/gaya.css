@@ -666,3 +666,6 @@ details[open] > .riwayat-judul::before { content: "▾ "; }
 .tebak-item.tebak-kurang { color: var(--remis); }
 .tebak-item.tebak-meleset { color: #b3261e; }
 .tebak-rangkum { margin-top: 8px; font-weight: 600; }
+
+/* Tanya: kalimat jawaban dari templat server, di atas tabel */
+.kalimat-jawaban { margin: 0 0 10px; padding: 8px 10px; background: var(--aksen-redup); border-left: 3px solid var(--aksen); }

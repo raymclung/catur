@@ -104,7 +104,17 @@ dinormalisasi, dan tandai bahwa identitasnya belum terverifikasi.
 
 *Batas yang diketahui:* normalisasi hanya menyamakan huruf besar-kecil, tanda
 baca, dan gelar, jadi `carlsen magnus` ≠ `carlsen m` (dicatat sebagai tes di
-`tests/test_impor.py`).
+`tests/test_impor.py`). Pencocokan inisial (B13) menyatukan singkatan yang
+hanya punya **satu** calon nama lengkap. Diukur 9 Okt 2026: dari 3.257 nama
+singkat, 3.239 tidak punya pasangan nama lengkap sama sekali (jadi bukan
+pemain ganda), dan hanya **18 nama / 63 partai** yang bercalon ganda. Sebelas
+digabung atas pilihan Ray setelah Elo per tahunnya dibandingkan dengan tiap
+calon (log `data/laporan/log-gabung-singkatan-20261009-*.txt`). Tujuh sisanya
+sengaja dibiarkan karena datanya sendiri menolak tebakan: `Volkov,S` dan
+`Petrov,M` ternyata campuran dua orang (Elo 2554–2632 lalu 2296–2456; atau
+dua rentang tahun yang tidak bersambung), `Xu,X` ber-Elo 2424 saat Xu
+Xiangyu sudah 2570, dan `Chen, J.`, `Ravi,T`, `Szabo,K`, `Novikov,S` tidak
+bisa dibedakan dari calonnya.
 
 *Batas yang diketahui (gelar & negara, diukur 25 Sep 2026):* kolom `gelar`
 hanya bisa diisi untuk pemain yang punya `fide_id`, karena satu-satunya sumber
@@ -122,7 +132,24 @@ menaikkannya tanpa mengarang: penggabungan pemain kembar (baris pgnmentor
 melebur ke baris TWIC yang ber-FIDE-ID), dan untuk lawan akun online, gelar
 dari profil akun lewat API Lichess/Chess.com (`app/gelar_akun.py`, 25 Sep
 2026 — hanya gelar FIDE, `LM`/`BOT` dibuang). Pencarian *nama* ke FIDE
-sengaja tidak dipakai: dua orang bisa senama, dan itu menebak.
+semula sengaja tidak dipakai: dua orang bisa senama, dan itu menebak.
+
+*Diubah 9 Okt 2026 (Ray: "Tulis", setelah melihat uji kering):* pencocokan
+nama ke daftar pemain resmi FIDE (`cocokkan_fide.py`, `players_list.zip` dari
+ratings.fide.com) dipakai, tapi hanya kalau semua pagar terpenuhi: nama unik
+di daftar FIDE, bukan singkatan, bukan akun online, umur masuk akal (partai
+pertama >= tahun lahir + 6), dan Elo >= 2300 di partai harus bergelar di FIDE.
+Dua pagar terakhir lahir dari uji kering: `Botvinnik, Mikhail` (partai 1936)
+hampir dicocokkan ke orang Israel kelahiran 1983, dan `Larsen, Bent` (GM,
+Elo 2660) ke orang Denmark senama tanpa gelar. Hasil: **2.532 pemain dapat
+FIDE ID, gelar terisi 3.087 → 5.039 (15% → 25%)**. `terverifikasi` tidak
+dinaikkan; tiap baris ada di `data/laporan/cocokkan-fide-20261009-224901.tsv`
+supaya bisa dibatalkan satu per satu. **Batas yang diterima:** orang yang
+namanya unik di FIDE tapi partainya sebenarnya milik orang lain yang tidak
+terdaftar FIDE tetap bisa lolos; pagar umur dan Elo menahan sebagian besar,
+bukan semuanya. Yang sengaja tidak tersentuh: 2.507 pemain tidak ada di FIDE
+sama sekali (kebanyakan pemain lama), 301 bernama ganda di FIDE, 3.310 nama
+singkat, 7.513 akun online.
 
 *Diperbaiki 12 Sep 2026 (B13):* nama yang depannya disingkat kini dicocokkan
 satu lapis di atas normalisasi, di `dapatkan_atau_buat_pemain()`. `Aronian,L`
@@ -1049,8 +1076,10 @@ Posisi yang sudah selesai (mat/remis) dijawab tanpa memanggil engine:
 ### Ditunda ke versi berikutnya (dicatat, bukan dilupakan)
 
 Analisis tanpa henti (SSE/WebSocket), engine di browser (WASM), menyimpan
-posisi hasil susun ke database, memicu analisis partai penuh dari tombol web
-(butuh antrean pekerjaan supaya tidak bentrok dengan batch).
+posisi hasil susun ke database. (Memicu analisis partai penuh dari tombol web
+sudah ada: tombol "Analisa partai ini dengan engine" di kartu "Belum
+dianalisis" halaman partai (`web/ringkasan-analisis.js`) membuka
+`/static/mesin.html?kelompok=id&id=<partai>`.)
 
 ---
 
@@ -1264,18 +1293,27 @@ karena membuat semua peringatan lain ikut diabaikan.
 
 ### Batas yang diketahui
 
-- **12–24 detik per pertanyaan.** Bukan interaktif seperti pencarian biasa;
-  perlu penanda "sedang memikirkan" di antarmuka nanti.
+- **12–24 detik untuk pertanyaan baru** — itu batas model 7b di CPU laptop
+  ini. Diperbaiki 9 Okt 2026 (commit `afd0209`) sejauh yang bisa tanpa
+  mengganti model: (1) skema untuk prompt di-cache 10 menit — `COUNT(*)`
+  analisis_langkah makan 9,4 s saat cache disk dingin; (2) SQL di-cache per
+  pertanyaan, jadi pertanyaan yang sama 0,05 s tanpa LLM, sedangkan hasilnya
+  tetap dibaca ulang dari database; (3) `POST /api/tanya/panaskan` memuat
+  model saat halaman dibuka, `keep_alive` 10 menit. Cache hilang kalau
+  server dimatikan. Waktu dengan Ollama sungguhan belum diukur ulang (RAM
+  bebas 2,8 GB saat itu, model butuh 4,7 GB).
 - **LLM bisa mengarang SQL yang salah secara logika**, bukan cuma sintaks.
   `peringatan_hasil()` menangkap tiga pola yang terbukti terjadi, tapi itu
   petunjuk, bukan jaminan: SQL salah yang tidak cocok pola apa pun tetap
   lolos tanpa ditandai. SQL-nya selalu ditampilkan supaya Ray bisa menilai
   sendiri. Pemeriksaan kebenaran logika sepenuhnya tidak bisa diotomatiskan.
-- **Belum ada lapis yang mengubah baris jadi kalimat.** Hasilnya masih tabel.
-- `app/tanya_db.py` memuat SQL (`PRAGMA table_info`, `SELECT COUNT(*)`),
-  sedangkan `CLAUDE.md` bagian 4 menyebut daftar modul tetap tempat SQL
-  boleh berada. **Penyimpangan ini belum disetujui Ray** — kalau disetujui,
-  nama berkas ini perlu ditambahkan ke daftar itu.
+- **Kalimat jawaban dari templat, bukan LLM** (`kalimat_jawaban`, 9 Okt
+  2026). Angka disalin apa adanya dari baris, jadi kalimat dan tabel tidak
+  bisa berbeda. Batasnya: kalimatnya kaku, memakai alias kolom dari SQL, dan
+  "baris pertama" mengikuti urutan SQL — bukan berarti "teratas".
+- (Butir lama "`tanya_db.py` memuat SQL, penyimpangan belum disetujui" sudah
+  gugur: sejak 21 Sep `CLAUDE.md` bagian 4 mengizinkan modul fitur punya
+  kuerinya sendiri; yang dilarang hanya SQL di `app/main.py`.)
 - Model perlu RAM: jangan menjalankan pertanyaan bersamaan dengan batch
   analisis engine. Aturan "maksimal dua proses engine" di mesin ini tetap
   berlaku, dan LLM ikut menghitung.
