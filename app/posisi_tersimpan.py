@@ -22,6 +22,10 @@ def _fen_sah(fen: str) -> str:
     board = chess.Board(fen)          # ValueError kalau rusak
     if not board.is_valid():
         raise ValueError("posisi tidak sah")
+    # Aturan 75 langkah = 150 ply; partai terpanjang yang pernah dimainkan
+    # < 300 langkah. Angka 99999999999999999999 dulu tersimpan apa adanya.
+    if board.halfmove_clock > 150 or board.fullmove_number > 1000:
+        raise ValueError("hitungan langkah di FEN tidak masuk akal")
     return board.fen()
 
 

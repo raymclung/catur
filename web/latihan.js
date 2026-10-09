@@ -67,185 +67,20 @@
   var partaiTunggal = parseInt(new URLSearchParams(window.location.search).get("partai_id"), 10) || null;
   var akunPribadi = [];      // id akun tanpa gelar/FIDE ID, ≥100 partai
 
-  /* Progres disimpan di DATABASE sejak A38 (tabel latihan_jawaban, rute
-     /api/latihan/*): tiap jawaban satu baris, jadi riwayatnya bisa dihitung per
-     minggu dan tidak hilang kalau data situs dibersihkan. `progres` = salinan
-     status terakhir di memori; localStorage hanya cadangan kalau server tidak
-     bisa dihubungi, plus antrean jawaban yang belum terkirim. */
-  var KUNCI_PROGRES = "latihan.dikuasai";
-  var KUNCI_TERTUNDA = "latihan.tertunda";
-  var progres = {};
-  function bacaLokal(kunci, awal) {
-    try { return JSON.parse(localStorage.getItem(kunci) || "null") || awal; } catch (e) { return awal; }
-  }
-  function tulisLokal(kunci, nilai) {
-    try { localStorage.setItem(kunci, JSON.stringify(nilai)); } catch (e) { /* penyimpanan tidak tersedia */ }
-  }
-  function bacaProgres() { return progres; }
-  function simpanProgres(p) { progres = p; tulisLokal(KUNCI_PROGRES, p); }
-  function hariIni() {
-    var d = new Date();
-    return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
-  }
+  /* Catatan jawaban, pengiriman ke server, dan kartu Perkembangan ada di
+     web/latihan-catatan.js (LatihanCatatan). Di berkas ini tinggal pemakaiannya. */
+  var Catatan = window.LatihanCatatan;
+  var JEDA_ULANG_HARI = Catatan.JEDA_ULANG_HARI;
+  function bacaProgres() { return Catatan.baca(); }
+  function kunciSoal(s) { return Catatan.kunciSoal(s); }
+  function alasanTunda(p, s) { return Catatan.alasanTunda(p, s); }
+  function tampilkanPerkembangan() { return Catatan.gambarPerkembangan(el.perkembangan, mode); }
+  function muatCatatan() { return Catatan.muat(galat); }
+  /* hasil: "benar" | "salah" | "menyerah" | "pilihan" */
+  function ingatHasil(s, hasil, uci) { return Catatan.ingat(s, hasil, uci, tampilkanPerkembangan); }
 
-  function kirimJawaban(isi) {
-    return fetch("/api/latihan/jawaban", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(isi)
-    }).then(function (r) { if (!r.ok) throw new Error("server " + r.status); });
-  }
-  /* Jawaban yang gagal terkirim (server mati, database sedang dikunci impor)
-     diantrekan dan dikirim ulang saat halaman dibuka berikutnya. */
-  function kirimTertunda() {
-    var antre = bacaLokal(KUNCI_TERTUNDA, []);
-    if (!antre.length) return Promise.resolve();
-    var sisa = [];
-    return antre.reduce(function (rantai, isi) {
-      return rantai.then(function () { return kirimJawaban(isi).catch(function () { sisa.push(isi); }); });
-    }, Promise.resolve()).then(function () { tulisLokal(KUNCI_TERTUNDA, sisa); });
-  }
-
-  /* Catatan dari server. Pertama kali: catatan lama di browser dipindahkan
-     (server melewati kunci yang sudah punya baris, jadi aman diulang). */
-  function muatCatatan() {
-    var lama = bacaLokal(KUNCI_PROGRES, {});
-    var impor = Object.keys(lama).length
-      ? fetch("/api/latihan/catatan/impor", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ catatan: lama })
-        }).catch(function () { /* dicoba lagi lain kali */ })
-      : Promise.resolve();
-    return impor.then(kirimTertunda).then(function () { return ambil("/api/latihan/catatan"); })
-      .then(function (c) { simpanProgres(c); })
-      .catch(function () {
-        progres = lama;
-        galat("Catatan latihan tidak bisa diambil dari server; sementara memakai salinan di browser.");
-      });
-  }
-  /* Soal pembukaan dikunci per POSISI, bukan per partai: posisi yang sama
-     dicapai di puluhan partai dan cukup satu catatan. */
-  function kunciSoal(s) { return s.jenis === "pembukaan" ? "buka:" + s.fen : s.partai_id + ":" + s.ply; }
-
-  /* Mode "pembukaan" (A37): posisi repertoire tempat langkah Ray jarang
-     dimainkan GM, dari GET /api/latihan/pembukaan. Jawaban benar = langkah GM
-     mana pun dengan porsi >= 5 %, bukan langkah terbaik engine. */
   var mode = "kesalahan";
   var ringkasanPembukaan = null;
-
-  /* Aturan Ray 13 Sep 2026: soal yang BENAR dibuang dari kumpulan, soal yang
-     SALAH disimpan dan baru muncul lagi setelah minimal 3 hari — "biar sudah
-     lupa". Karena itu tidak ada lagi pengulangan di sesi yang sama.
-     Simpanan: { "partai:ply": {h: "b"|"s", w: "YYYY-MM-DD"} }; nilai lama
-     berupa teks (waktu jawaban benar) tetap dibaca sebagai benar. */
-  var JEDA_ULANG_HARI = 3;
-
-  function catatanSoal(p, s) {
-    var v = p[kunciSoal(s)];
-    if (!v) return null;
-    if (typeof v === "string") return { h: "b", w: v.slice(0, 10) };   // bentuk lama
-    return v;
-  }
-  /* Babak kesalahan dari nomor langkah — kasar tapi jujur, jadi labelnya
-     menyebut nomor langkah, bukan "pembukaan/tengah/akhir". */
-  function kelompokSoal(s) {
-    if (s.jenis === "pembukaan") return s.pembukaan;
-    var langkah = Math.floor(s.ply / 2) + 1;
-    return langkah <= 12 ? "langkah 1–12" : langkah <= 30 ? "langkah 13–30" : "langkah 31+";
-  }
-  /* hasil: "benar" | "salah" | "menyerah" | "pilihan" */
-  function ingatHasil(s, hasil, uci) {
-    var p = bacaProgres();
-    p[kunciSoal(s)] = { h: hasil === "benar" ? "b" : hasil === "pilihan" ? "a" : "s", w: hariIni() };
-    simpanProgres(p);
-    var isi = { kunci: kunciSoal(s), hasil: hasil, kelompok: kelompokSoal(s) };
-    if (uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) isi.langkah_uci = uci;
-    kirimJawaban(isi).then(tampilkanPerkembangan).catch(function () {
-      var antre = bacaLokal(KUNCI_TERTUNDA, []);
-      antre.push(isi);
-      tulisLokal(KUNCI_TERTUNDA, antre);
-    });
-  }
-
-  /* ---------- kartu perkembangan (GET /api/latihan/ringkasan) ---------- */
-
-  function tampilkanPerkembangan() {
-    if (!el.perkembangan) return;
-    ambil("/api/latihan/ringkasan").then(function (semua) {
-      var r = semua[mode];
-      var isi = el.perkembangan;
-      isi.textContent = "";
-      if (!r) return;
-      var status = buat("div", "latihan-strip");
-      [[r.selesai, "selesai"], [r.menunggu, "menunggu " + semua.jeda_ulang_hari + " hari"],
-       [r.siap_ulang, "siap diulang"], [r.pilihan, "pilihan sendiri"]].forEach(function (x) {
-        var sp = buat("span");
-        sp.appendChild(buat("strong", null, x[0]));
-        sp.appendChild(teks(" " + x[1]));
-        status.appendChild(sp);
-      });
-      isi.appendChild(status);
-      if (!r.dijawab) {
-        isi.appendChild(buat("div", "kecil redup", "Belum ada jawaban di mode ini."));
-        return;
-      }
-      isi.appendChild(buat("div", "kecil", "Semua jawaban: " + r.benar + " dari " + r.dijawab +
-        " benar (" + persenTeks(r.persen_benar) + ")"));
-
-      var tMinggu = document.createElement("table");
-      var kepala = document.createElement("tr");
-      ["Minggu mulai", "Dijawab", "Benar"].forEach(function (j) { kepala.appendChild(buat("th", null, j)); });
-      tMinggu.appendChild(kepala);
-      r.per_minggu.forEach(function (m) {
-        var tr = document.createElement("tr");
-        var redup = m.dijawab ? null : "redup";
-        tr.appendChild(buat("td", redup, tanggalPendek(m.mulai)));
-        tr.appendChild(buat("td", redup, m.dijawab));
-        tr.appendChild(buat("td", redup, m.dijawab ? m.benar + " (" + persenTeks(m.persen_benar) + ")" : "–"));
-        tMinggu.appendChild(tr);
-      });
-      isi.appendChild(tMinggu);
-
-      if (r.per_kelompok.length) {
-        var tKel = document.createElement("table");
-        var k2 = document.createElement("tr");
-        [mode === "pembukaan" ? "Pembukaan" : "Babak", "Salah", "Benar", "% benar"].forEach(function (j) {
-          k2.appendChild(buat("th", null, j));
-        });
-        tKel.appendChild(k2);
-        r.per_kelompok.forEach(function (k) {
-          var tr = document.createElement("tr");
-          tr.appendChild(buat("td", null, k.kelompok));
-          tr.appendChild(buat("td", null, k.salah));
-          tr.appendChild(buat("td", null, k.benar));
-          tr.appendChild(buat("td", null, persenTeks(k.persen_benar)));
-          tKel.appendChild(tr);
-        });
-        isi.appendChild(tKel);
-      }
-    }).catch(function () {
-      el.perkembangan.textContent = "";
-      el.perkembangan.appendChild(buat("div", "kecil redup", "Ringkasan tidak bisa diambil dari server."));
-    });
-  }
-  function persenTeks(x) { return x === null || x === undefined ? "–" : String(x).replace(".", ",") + "%"; }
-  function tanggalPendek(iso) {
-    var b = iso.split("-");
-    return parseInt(b[2], 10) + " " + ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"][parseInt(b[1], 10) - 1];
-  }
-  function hariSejak(tanggal) {
-    var t = Date.parse(tanggal + "T00:00:00");
-    return isNaN(t) ? 9999 : Math.floor((Date.now() - t) / 86400000);
-  }
-  /* null = boleh dikerjakan sekarang; teks = alasan ditunda. */
-  function alasanTunda(p, s) {
-    var c = catatanSoal(p, s);
-    if (!c) return null;
-    if (c.h === "b") return "sudah benar";
-    /* "Ini memang pilihanku": langkah jarang GM yang Ray mainkan dengan sengaja
-       (mis. sistem d3 di English). Tidak ditanyakan lagi, kecuali "ulang semua". */
-    if (c.h === "a") return "pilihan sendiri";
-    var sisa = JEDA_ULANG_HARI - hariSejak(c.w);
-    return sisa > 0 ? "salah, ulang " + sisa + " hari lagi" : null;
-  }
 
   /* Hanya soal yang boleh dikerjakan yang masuk antrean: yang sudah benar
      dibuang, yang salah menunggu JEDA_ULANG_HARI. */
@@ -268,16 +103,7 @@
     return "Tidak ada kesalahan jenis ini " + tempat + ".";
   }
 
-  function hitungTunda() {
-    var p = bacaProgres(), benar = 0, tunggu = 0, pilihan = 0;
-    soalSemua.forEach(function (s) {
-      var a = alasanTunda(p, s);
-      if (a === "sudah benar") benar++;
-      else if (a === "pilihan sendiri") pilihan++;
-      else if (a) tunggu++;
-    });
-    return { benar: benar, tunggu: tunggu, pilihan: pilihan };
-  }
+  function hitungTunda() { return Catatan.hitung(soalSemua); }
 
   var el = {
     galat: document.getElementById("galat"),
@@ -476,21 +302,13 @@
     });
   }
 
+  /* Mode pembukaan: data dan tampilannya di web/latihan-pembukaan.js. */
   function kumpulkanPembukaan() {
     ringkasanPembukaan = null;
     el.status.textContent = "menghitung posisi pembukaan… (pertama kali ±10 detik)";
-    return ambil("/api/latihan/pembukaan").then(function (d) {
-      ringkasanPembukaan = d.ringkasan || {};
-      d.soal.forEach(function (s) {
-        var biasa = s.langkah_ray[0] || {};
-        soalSemua.push({
-          jenis: "pembukaan", fen: s.fen, warna: s.warna, pembukaan: s.pembukaan,
-          dicapai: s.dicapai, menyimpang: s.menyimpang, langkah_ray: s.langkah_ray,
-          partai_gm: s.partai_gm, diterima: s.diterima, gm: s.gm,
-          jalur: s.contoh.jalur, partai_id: s.contoh.partai_id,
-          san: biasa.san, terbaik_uci: s.gm[0].uci, terbaik_san: s.gm[0].san
-        });
-      });
+    return LatihanPembukaan.muat().then(function (d) {
+      ringkasanPembukaan = d.ringkasan;
+      d.soal.forEach(function (s) { soalSemua.push(s); });
       if (!soalSemua.length) {
         throw new Error("Tidak ada soal pembukaan: di " + (ringkasanPembukaan.partai_repertoire || 0) +
           " partai repertoire, tidak ada posisi tempat langkahmu berulang kali jarang dimainkan GM.");
@@ -501,18 +319,6 @@
     });
   }
 
-  /* "1.c4 e5 2.Nc3 Nf6 3.?" dari jalur SAN menuju posisi soal. */
-  function tulisJalur(jalur) {
-    var keluar = [];
-    jalur.forEach(function (san, i) {
-      keluar.push((i % 2 === 0 ? (i / 2 + 1) + "." : "") + san);
-    });
-    keluar.push(jalur.length % 2 === 0 ? (jalur.length / 2 + 1) + ".?" : Math.ceil(jalur.length / 2) + "...?");
-    return keluar.join(" ");
-  }
-
-  function persen(x) { return x === null || x === undefined ? "–" : String(x).replace(".", ",") + "%"; }
-
   function tampilkanSoalPembukaan() {
     permainan = new Chess();
     for (var i = 0; i < soal.jalur.length; i++) {
@@ -522,48 +328,11 @@
     fenSoal = permainan.fen();
     papan.position(fenSoal, false);
     el.status.textContent = (soal.warna === "putih" ? "Putih" : "Hitam") + " jalan · cari langkah yang dimainkan GM";
-    el.soal.textContent = "";
-    el.soal.appendChild(buat("div", null, soal.pembukaan + " · " + tulisJalur(soal.jalur)));
-    /* Menyebut langkah kebiasaan Ray bukan membocorkan jawaban — justru itu
-       yang mau diganti. */
-    el.soal.appendChild(buat("div", "kecil redup", "Posisi ini kamu capai " + soal.dicapai + " kali. " +
-      soal.menyimpang + " kali kamu memainkan langkah yang jarang dimainkan GM, paling sering " +
-      soal.san + "."));
+    LatihanPembukaan.gambarSoal(soal, el.soal);
   }
 
   function jawabPembukaan(uci, menyerah) {
-    var cocok = false;
-    if (!menyerah && uci) {
-      soal.diterima.forEach(function (d) { if (uci === d || uci.slice(0, 4) === d.slice(0, 4)) cocok = true; });
-    }
-    var kebiasaan = !cocok && uci && soal.langkah_ray.some(function (r) { return r.uci.slice(0, 4) === uci.slice(0, 4); });
-    el.jawab.appendChild(buat("div", cocok ? "latihan-benar" : "latihan-salah",
-      cocok ? "Benar" : (menyerah ? "Jawabannya" : (kebiasaan ? "Itu kebiasaanmu" : "Bukan itu"))));
-    el.jawab.appendChild(buat("div", "kecil redup", "Dari " + soal.partai_gm.toLocaleString("id-ID") +
-      " partai GM sejak 2000 · diterima: langkah dengan porsi ≥ 5% · skor dari sudut yang jalan"));
-
-    var tabel = document.createElement("table");
-    var kepala = document.createElement("tr");
-    ["Langkah GM", "Porsi", "Skor", "Partai"].forEach(function (j) { kepala.appendChild(buat("th", null, j)); });
-    tabel.appendChild(kepala);
-    soal.gm.forEach(function (g) {
-      var tr = document.createElement("tr");
-      var diterima = soal.diterima.indexOf(g.uci) >= 0;
-      var dimainkan = uci && uci.slice(0, 4) === g.uci.slice(0, 4);
-      tr.appendChild(buat("td", diterima ? null : "redup", g.san + (dimainkan ? "  ← kamu" : "")));
-      tr.appendChild(buat("td", diterima ? null : "redup", persen(g.porsi)));
-      tr.appendChild(buat("td", diterima ? null : "redup", persen(g.skor)));
-      tr.appendChild(buat("td", diterima ? null : "redup", g.n.toLocaleString("id-ID")));
-      tabel.appendChild(tr);
-    });
-    el.jawab.appendChild(tabel);
-
-    el.jawab.appendChild(buat("div", "kecil", "Di partaimu: " + soal.langkah_ray.slice(0, 4).map(function (r) {
-      return r.san + " " + r.n + "×" + (r.skor !== null && r.skor !== undefined ? " (skor " + persen(r.skor) + ")" : "");
-    }).join(" · ")));
-    el.jawab.appendChild(buat("div", "kecil redup", "Jarang dimainkan GM belum tentu salah. " +
-      "Nilai sendiri dengan engine di bawah; kalau memang pilihanmu, tandai supaya tidak ditanyakan lagi."));
-    return cocok;
+    return LatihanPembukaan.gambarJawaban(soal, el.jawab, uci, menyerah);
   }
 
   /* ---------- posisi soal ---------- */
@@ -572,7 +341,7 @@
     var penuh = new Chess();
     if (!penuh.load_pgn(pgn)) return null;
     var riwayat = penuh.history();
-    var c = new Chess();
+    var c = AlatCatur.permainanAwal(penuh);      // partai ber-[FEN] tidak mulai dari posisi standar
     for (var i = 0; i < ply && i < riwayat.length; i++) c.move(riwayat[i]);
     return c;
   }
@@ -755,11 +524,13 @@
       return;
     }
     if (sq === terpilih) { hapusPilihan(); return; }
-    var m = permainan.move({ from: terpilih, to: sq, promotion: "q" });
-    if (m) {
+    var dari = terpilih;
+    if (PilihPromosi.tunda(permainan, dari, sq, function (p) { jalankan(dari, sq, p); })) {
       hapusPilihan();
-      papan.position(permainan.fen());
-      if (telusur) jadwalkanMesin(); else nilai(m.from + m.to + (m.promotion || ""));
+      return;
+    }
+    if (jalankan(terpilih, sq)) {
+      hapusPilihan();
       return;
     }
     hapusPilihan();
@@ -767,9 +538,21 @@
   }
 
   function saatJatuh(source, target) {
-    var m = permainan.move({ from: source, to: target, promotion: "q" });
-    if (m === null) return "snapback";
+    if (PilihPromosi.tunda(permainan, source, target, function (p) { jalankan(source, target, p); })) {
+      return "snapback";
+    }
+    if (!jalankan(source, target)) return "snapback";
+  }
+
+  /* Satu langkah dari papan (klik, seret, atau pilihan promosi). Promosi
+     selain ratu harus bisa dijawab: soal ber-jawaban =N/=R dulu mustahil
+     benar karena semua papan memaksa ratu (audit 27 Sep 2026). */
+  function jalankan(dari, ke, promosi) {
+    var m = permainan.move({ from: dari, to: ke, promotion: promosi || "q" });
+    if (!m) return null;
+    papan.position(permainan.fen());
     if (telusur) jadwalkanMesin(); else nilai(m.from + m.to + (m.promotion || ""));
+    return m;
   }
 
 
@@ -901,16 +684,9 @@
   el.ulangSemua.addEventListener("click", function () {
     var namaMode = mode === "pembukaan" ? "latihan pembukaan" : "latihan kesalahan partai";
     if (!window.confirm("Lupakan semua catatan benar/salah " + namaMode + "? Semua soalnya muncul lagi.")) return;
-    /* Hanya catatan mode yang sedang dibuka; mode lain tidak ikut terhapus. */
-    /* Riwayat di server tidak dihapus (tetap dihitung di Perkembangan), hanya
-       status soalnya yang dilupakan. */
-    fetch("/api/latihan/catatan?mode=" + mode, { method: "DELETE" }).then(function (r) {
-      if (!r.ok) throw new Error("Server menjawab " + r.status + " saat mengulang catatan");
-      var p = bacaProgres();
-      Object.keys(p).forEach(function (k) {
-        if ((k.indexOf("buka:") === 0) === (mode === "pembukaan")) delete p[k];
-      });
-      simpanProgres(p);
+    /* Hanya catatan mode yang sedang dibuka; mode lain tidak ikut terhapus,
+       dan riwayat di server tetap dihitung di Perkembangan. */
+    Catatan.ulangSemua(mode).then(function () {
       tampilkanPerkembangan();
       return kumpulkan();
     }).catch(function (e) { galat(e.message); });
@@ -960,7 +736,7 @@
         var m = permainan.moves({ verbose: true }).filter(function (x) { return x.from + x.to !== uci.slice(0, 4); })[0];
         uci = m.from + m.to;
       }
-      var mv = permainan.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: "q" });
+      var mv = permainan.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4) || "q" });
       if (mv) nilai(mv.from + mv.to + (mv.promotion || ""));
     }, 300);
   }
@@ -977,7 +753,7 @@
   var qSaring = new URLSearchParams(window.location.search);
   var adaSaringanUrl = false;
   ["lawan", "format", "jenis"].forEach(function (k) {
-    if (qSaring.get(k) && el[k].querySelector('option[value="' + qSaring.get(k) + '"]')) {
+    if (qSaring.get(k) && el[k].querySelector('option[value="' + CSS.escape(qSaring.get(k)) + '"]')) {
       el[k].value = qSaring.get(k);
       adaSaringanUrl = true;
     }
@@ -997,7 +773,7 @@
   muatCatatan().then(isiAkun).then(function () {
     tampilkanPerkembangan();
     var a = qSaring.get("akun");
-    if (a && el.akun.querySelector('option[value="' + a + '"]')) {
+    if (a && el.akun.querySelector('option[value="' + CSS.escape(a) + '"]')) {
       el.akun.value = a;
       adaSaringanUrl = true;
     }

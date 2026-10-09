@@ -23,22 +23,18 @@ laptop.
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from pathlib import Path
 
+from . import berkas_json
 from .batas_cpu import PATH_PENGATURAN, pid_stockfish
 
 _HAK_JEDA = 0x0800        # PROCESS_SUSPEND_RESUME
 
 
 def _baca(path: Path | None = None) -> dict:
-    try:
-        isi = json.loads((path or PATH_PENGATURAN).read_text(encoding="utf-8"))
-        return isi if isinstance(isi, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return berkas_json.baca(path or PATH_PENGATURAN, {})
 
 
 def status(path: Path | None = None) -> dict:
@@ -51,15 +47,13 @@ def sedang_jeda(path: Path | None = None) -> bool:
 
 
 def _simpan(jeda: bool, path: Path | None = None) -> None:
-    p = path or PATH_PENGATURAN
-    isi = _baca(p)
-    isi["jeda"] = jeda
-    if jeda:
-        isi["jeda_sejak"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    else:
-        isi.pop("jeda_sejak", None)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(isi, indent=1), encoding="utf-8", newline="\n")
+    # Di bawah kunci: batas_cpu.py menulis berkas yang sama (audit 28 Sep 2026).
+    with berkas_json.ubah(path or PATH_PENGATURAN, {}) as isi:
+        isi["jeda"] = jeda
+        if jeda:
+            isi["jeda_sejak"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        else:
+            isi.pop("jeda_sejak", None)
 
 
 def _ubah_proses(pid: int, bekukan: bool) -> bool:

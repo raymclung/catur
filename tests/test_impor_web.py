@@ -157,6 +157,29 @@ class DaftarAkun(DasarImporWeb):
         self.assertEqual(satu["partai"], 1)
         self.assertEqual(satu["terakhir"], "2026.01.01")
 
+    def test_akun_dihitung_di_kedua_warna_tanpa_peka_huruf(self):
+        # Nama di PGN berbeda huruf dari AKUN ("mclung_07"), dan sekali jadi
+        # Putih, sekali jadi Hitam: keduanya harus terhitung, lawan tidak.
+        putih = PGN.replace("Satu, Pemain", "mclung_07").replace("Dua, Pemain", "lawan")
+        hitam = (PGN.replace("Satu, Pemain", "lawan2").replace("Dua, Pemain", "MCLUNG_07")
+                    .replace("2026.01.01", "2026.02.02"))
+        impor_web.impor_pgn(impor_web.UnggahPgn(pgn=putih + "\n\n" + hitam, sumber="uji"))
+        satu = [a for a in impor_web.daftar_akun()["akun"] if a["akun"] == "McLung_07"][0]
+        self.assertEqual(satu["partai"], 2)
+        self.assertEqual(satu["terakhir"], "2026.02.02")
+
+    def test_kueri_akun_tidak_memindai_seluruh_partai(self):
+        """Penjaga performa: bentuk JOIN lama memindai semua partai (18 detik)."""
+        conn = impor_web.koneksi()
+        try:
+            rencana = " | ".join(r[3] for r in conn.execute(
+                "EXPLAIN QUERY PLAN " + impor_web.KUERI_JUMLAH_AKUN, ("x",)))
+        finally:
+            conn.close()
+        self.assertNotRegex(rencana, r"SCAN (partai|g)\b", rencana)
+        self.assertIn("idx_partai_putih", rencana)
+        self.assertIn("idx_partai_hitam", rencana)
+
     def test_saringan_turnamen_ikut_dilaporkan(self):
         """RyuMcLungG hanya dihitung untuk Arena Kings — halaman harus bisa menyebutnya."""
         hasil = {a["akun"].lower(): a for a in impor_web.daftar_akun()["akun"]}

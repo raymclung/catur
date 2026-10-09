@@ -32,6 +32,15 @@
     return "Posisi dari " + (tombol.dataset.asal || "papan");
   }
 
+  /* Halaman partai (/partai/{id}): posisi yang disimpan dicatat asalnya,
+     supaya dari daftar Tersimpan bisa kembali ke partainya. Dulu selalu
+     null (audit 27 Sep 2026). */
+  function partaiAsal() {
+    if (tombol.dataset.asal !== "partai") return null;
+    var m = location.pathname.match(/\/partai\/(\d+)\/?$/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
   function kedip(teksBaru) {
     var lama = tombol.textContent;
     tombol.textContent = teksBaru;
@@ -51,7 +60,7 @@
       fetch("/api/posisi-tersimpan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: fen, judul: judul.trim(), catatan: "", asal: tombol.dataset.asal || "", partai_id: null })
+        body: JSON.stringify({ fen: fen, judul: judul.trim(), catatan: "", asal: tombol.dataset.asal || "", partai_id: partaiAsal() })
       }).then(function (r) {
         kedip(r.ok ? "✓" : "✕");
       }).catch(function () { kedip("✕"); });

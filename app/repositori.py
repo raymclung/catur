@@ -12,6 +12,19 @@ import sqlite3
 
 from .format_partai import kontrol_normal
 
+
+def pola_like(teks: str, awal: bool = True, akhir: bool = True) -> str:
+    r"""
+    Pola LIKE dari teks pengguna, dengan % _ \ di-escape. Pakai bersama
+    `LIKE ? ESCAPE '\'` (di kode Python: `ESCAPE '\\'`).
+
+    Audit 27 Sep 2026: tanpa escape, mencari "%" atau "_" mengembalikan
+    SEMUA pemain, dan nama akun berisi _ (mis. McLung_07) ikut mencocokkan
+    huruf apa pun di posisi itu.
+    """
+    aman = teks.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return ("%" if awal else "") + aman + ("%" if akhir else "")
+
 # Kolom yang selalu diambil untuk baris daftar partai. Ditulis sekali supaya
 # daftar dan detail tidak pernah beda isinya.
 KOLOM_DAFTAR = """
@@ -51,9 +64,16 @@ DARI_DAFTAR = """
     LEFT JOIN analisis a ON a.partai_id = g.id
 """
 
+# Tanggal PGN yang tidak diketahui ditulis '?' ("1996.??.??", 12.821 partai).
+# '?' lebih besar dari angka di ASCII, jadi dulu "1996.??.??" terurut DI ATAS
+# "1996.12.31" (audit 27 Sep 2026). Untuk URUTAN saja '?' dibaca '0' = awal
+# tahun/bulan; data tanggalnya tetap '??', tidak ditebak. Biayanya indeks
+# tanggal tidak dipakai untuk urutan: terukur <= 0,15 dtk pada 273 ribu partai.
+_TANGGAL_URUT = "REPLACE(g.tanggal, '?', '0')"
+
 URUTAN = {
-    "terbaru": "g.tanggal DESC, g.id DESC",
-    "terlama": "g.tanggal ASC, g.id ASC",
+    "terbaru": f"{_TANGGAL_URUT} DESC, g.id DESC",
+    "terlama": f"{_TANGGAL_URUT} ASC, g.id ASC",
     "terpanjang": "g.jumlah_langkah DESC, g.id DESC",
     "elo": "MAX(COALESCE(g.elo_putih,0), COALESCE(g.elo_hitam,0)) DESC, g.id DESC",
 }
@@ -76,26 +96,29 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
     syarat, params = [], []
 
     if cari:
-        pola = f"%{cari.strip()}%"
+        pola = pola_like(cari.strip())
         syarat.append(
-            "(pw.nama LIKE ? OR pb.nama LIKE ? OR t.nama LIKE ? "
-            " OR g.pembukaan LIKE ? OR g.eco LIKE ?)"
+            "(pw.nama LIKE ? ESCAPE '\\' OR pb.nama LIKE ? ESCAPE '\\' OR t.nama LIKE ? ESCAPE '\\' "
+            " OR g.pembukaan LIKE ? ESCAPE '\\' OR g.eco LIKE ? ESCAPE '\\')"
         )
         params += [pola] * 5
 
     if sumber == "gm":
         # Sama dengan penjelajah (/api/posisi): partai GM = TWIC + broadcast.
         # Diambil dari app.posisi supaya definisinya cuma ada di satu tempat.
-        from .posisi import SUMBER_GM
+        # Partai GM = antar-MANUSIA, sama dengan penjelajah: Kasparov-Deep Blue
+        # dan partai konsultasi (pemain.jenis) dulu ikut terhitung di sini.
+        from .posisi import SUMBER_GM, SYARAT_ANTAR_MANUSIA
         syarat.append(f"g.sumber IN ({','.join('?' * len(SUMBER_GM))})")
+        syarat.append(SYARAT_ANTAR_MANUSIA)
         params += list(SUMBER_GM)
     elif sumber:
         syarat.append("g.sumber = ?")
         params.append(sumber)
 
     if eco:
-        syarat.append("g.eco LIKE ?")
-        params.append(f"{eco.strip().upper()}%")
+        syarat.append("g.eco LIKE ? ESCAPE '\\'")
+        params.append(pola_like(eco.strip().upper(), awal=False))
 
     if hasil == "menang-kalah":
         # Keputusan Ray (SESI.md bagian 6): remis TIDAK dihapus dari database,
@@ -237,6 +260,16 @@ def ambil_partai(conn: sqlite3.Connection, partai_id: int) -> dict | None:
     return _baris_partai(baris) if baris else None
 
 
+def pemain_ada(conn: sqlite3.Connection, pemain_id: int) -> bool:
+    """
+    Pemain dengan id ini ada di database?
+
+    Dipakai rute yang hanya perlu tahu "ada atau tidak" sebelum menjawab 404.
+    Ditaruh di sini supaya `app/main.py` tidak perlu menulis SQL sendiri.
+    """
+    return conn.execute("SELECT 1 FROM pemain WHERE id = ?", (pemain_id,)).fetchone() is not None
+
+
 def cari_pemain(conn: sqlite3.Connection, cari: str | None = None,
                 limit: int = 30, pribadi: bool | None = None) -> list[dict]:
     """
@@ -248,8 +281,8 @@ def cari_pemain(conn: sqlite3.Connection, cari: str | None = None,
     """
     syarat, params = [], []
     if cari:
-        syarat.append("p.nama LIKE ?")
-        params.append(f"%{cari.strip()}%")
+        syarat.append("p.nama LIKE ? ESCAPE '\\'")
+        params.append(pola_like(cari.strip()))
     if pribadi is True:
         syarat.append("p.akun_pribadi = 1")
     elif pribadi is False:

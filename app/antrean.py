@@ -18,12 +18,14 @@ kalau ada yang macet.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
+from . import berkas_json
+from .db import FOLDER_DATA
+
 AKAR = Path(__file__).resolve().parents[1]
-PATH_ANTREAN = AKAR / "data" / "antrean-analisa.json"
+PATH_ANTREAN = FOLDER_DATA / "antrean-analisa.json"
 
 # Status satu pekerjaan:
 #   menunggu  belum dijalankan
@@ -35,19 +37,19 @@ STATUS = ("menunggu", "jalan", "selesai", "gagal", "batal")
 
 
 def baca(path: Path | None = None) -> list[dict]:
-    p = path or PATH_ANTREAN
-    try:
-        isi = json.loads(p.read_text(encoding="utf-8"))
-        return isi if isinstance(isi, list) else []
-    except (OSError, ValueError):
-        return []
+    return berkas_json.baca(path or PATH_ANTREAN, [])
 
 
 def tulis(daftar: list[dict], path: Path | None = None) -> None:
-    p = path or PATH_ANTREAN
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(daftar, indent=1, ensure_ascii=False), encoding="utf-8",
-                 newline="\n")
+    """Tulis atomik. Untuk baca-ubah-tulis pakai `_ubah()`, bukan baca()+tulis()."""
+    berkas_json.tulis(path or PATH_ANTREAN, daftar)
+
+
+def _ubah(path: Path | None):
+    # Semua perubahan lewat sini: server dan jaga_antrean.py menulis berkas
+    # yang sama, dan baca-ubah-tulis tanpa kunci kehilangan pekerjaan
+    # (audit 28 Sep 2026, lihat app/berkas_json.py).
+    return berkas_json.ubah(path or PATH_ANTREAN, [])
 
 
 def _nomor_baru(daftar: list[dict]) -> int:
@@ -57,18 +59,17 @@ def _nomor_baru(daftar: list[dict]) -> int:
 def tambah(saringan: dict, keterangan: str = "", jumlah: int | None = None,
            perkiraan_menit: int | None = None, path: Path | None = None) -> dict:
     """Taruh satu pekerjaan di belakang antrean."""
-    daftar = baca(path)
-    kerja = {
-        "id": _nomor_baru(daftar),
-        "saringan": saringan,
-        "keterangan": keterangan,
-        "jumlah": jumlah,
-        "perkiraan_menit": perkiraan_menit,
-        "status": "menunggu",
-        "ditambah": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    }
-    daftar.append(kerja)
-    tulis(daftar, path)
+    with _ubah(path) as daftar:
+        kerja = {
+            "id": _nomor_baru(daftar),
+            "saringan": saringan,
+            "keterangan": keterangan,
+            "jumlah": jumlah,
+            "perkiraan_menit": perkiraan_menit,
+            "status": "menunggu",
+            "ditambah": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        daftar.append(kerja)
     return kerja
 
 
@@ -80,12 +81,28 @@ def hapus(id_: int, path: Path | None = None) -> bool:
     /api/analisa/hentikan, supaya tidak ada baris yang hilang sementara
     prosesnya masih menulis ke database.
     """
-    daftar = baca(path)
-    sisa = [d for d in daftar if not (d.get("id") == id_ and d.get("status") != "jalan")]
-    if len(sisa) == len(daftar):
-        return False
-    tulis(sisa, path)
-    return True
+    with _ubah(path) as daftar:
+        n = len(daftar)
+        daftar[:] = [d for d in daftar if not (d.get("id") == id_ and d.get("status") != "jalan")]
+    return len(daftar) != n
+
+
+# Status yang sudah tidak akan berjalan lagi: isinya riwayat, bukan antrean.
+SELESAI = ("selesai", "gagal", "batal")
+
+
+def bersihkan_riwayat(path: Path | None = None) -> int:
+    """
+    Buang semua baris riwayat sekaligus, sisakan yang menunggu dan jalan.
+
+    Hanya menyentuh berkas antrean. Hasil analisisnya ada di tabel `analisis`
+    dan tidak ikut terhapus — Ray sempat mengira sebaliknya waktu melihat
+    tombol "Buang" di baris yang sudah selesai (25 Sep 2026).
+    """
+    with _ubah(path) as daftar:
+        n = len(daftar)
+        daftar[:] = [d for d in daftar if d.get("status") not in SELESAI]
+    return n - len(daftar)
 
 
 def berikutnya(path: Path | None = None) -> dict | None:
@@ -96,14 +113,12 @@ def berikutnya(path: Path | None = None) -> dict | None:
 
 
 def perbarui(id_: int, path: Path | None = None, **ubah) -> dict | None:
-    daftar = baca(path)
     hasil = None
-    for d in daftar:
-        if d.get("id") == id_:
-            d.update(ubah)
-            hasil = d
-    if hasil is not None:
-        tulis(daftar, path)
+    with _ubah(path) as daftar:
+        for d in daftar:
+            if d.get("id") == id_:
+                d.update(ubah)
+                hasil = d
     return hasil
 
 

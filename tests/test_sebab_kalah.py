@@ -131,6 +131,35 @@ class Golongkan(unittest.TestCase):
         self.assertEqual(g["sebab"], "waktu")
         self.assertEqual(g["keterangan"], "belum dianalisis")
 
+    def test_blunder_di_posisi_yang_sudah_kalah_bukan_penentu(self):
+        """Audit 28 Sep 2026 (partai 272655): 29…Kd6 dari -6,36 ditunjuk sebagai
+        sebab, padahal partainya sudah dibuang lebih awal oleh Nd4 (+0,25 -> -2,82)."""
+        lk = [dict(langkah(2, "Nd4", hilang=307, eval_sesudah=-282, klas="blunder"), eval_sebelum_cp=25),
+              dict(langkah(0, "Kd6", hilang=1000, eval_sesudah=-100000, klas="blunder"), eval_sebelum_cp=-636)]
+        lk.sort(key=lambda l: l["ply"])
+        g = golongkan(PGN_BIASA, "180+0", "putih", lk, True)
+        self.assertEqual(g["ply"], 2)
+        self.assertIn("Nd4", g["keterangan"])
+        self.assertIn("2 blunder", g["keterangan"])
+
+    def test_blunder_cepat_yang_bukan_penentu_tidak_jadi_missclick(self):
+        # ply 0 (0 detik) terjadi saat posisi sudah kalah; penentunya ply 2 (5 detik)
+        lk = [dict(langkah(0, "e4", hilang=900, eval_sesudah=-1500, klas="blunder"), eval_sebelum_cp=-600),
+              dict(langkah(2, "Nf3", hilang=400, eval_sesudah=-350, klas="blunder"), eval_sebelum_cp=50)]
+        self.assertEqual(golongkan(PGN_BIASA, "180+0", "putih", lk, True)["sebab"], "blunder")
+
+    def test_langkah_terbaik_tidak_pernah_jadi_sebab(self):
+        """12 dari 500 kekalahan dulu menunjuk langkah pilihan engine sendiri."""
+        lk = [dict(langkah(2, "Rf8", hilang=1000, eval_sesudah=-1000, klas="terbaik"), eval_sebelum_cp=0)]
+        self.assertEqual(golongkan(PGN_BIASA, "180+0", "putih", lk, True)["sebab"], "dikalahkan")
+
+    def test_semua_blunder_saat_sudah_kalah_jadi_dikalahkan(self):
+        lk = [dict(langkah(2, "Nf3", hilang=500, eval_sesudah=-900, klas="blunder"), eval_sebelum_cp=-400)]
+        self.assertEqual(golongkan(PGN_BIASA, "180+0", "putih", lk, True)["sebab"], "dikalahkan")
+
+    def test_inkremen_pecahan(self):
+        self.assertEqual(detik_dipakai(jam_per_ply(PGN_WAKTU), 2, "180+0.5"), 5.5)
+
     def test_kehilangan_di_batas_ditandai(self):
         lk = [langkah(0, "e4", hilang=1000, eval_sesudah=-1200, klas="blunder")]
         g = golongkan(PGN_BIASA, "180+0", "putih", lk, True)
@@ -171,6 +200,26 @@ class Kumpulan(unittest.TestCase):
         self.assertEqual([p["id"] for p in ketentuan["partai"]], [1])
         self.assertEqual(len(kekalahan(self.conn, [1], lawan="gelar")["partai"]), 1)
         self.assertEqual(len(kekalahan(self.conn, [1], lawan="2200")["partai"]), 1)
+
+    def test_saringan_lawan_sebelum_batas(self):
+        """Audit 27 Sep: saringan dijalankan SETELAH LIMIT, jadi kekalahan lama
+        melawan GM hilang di balik banyak kekalahan terbaru melawan non-GM."""
+        self.partai(1, 2, 2600, tanggal="2026.01.01")          # satu-satunya lawan bergelar, lama
+        for i in range(2, 12):
+            self.partai(i, 3, 1500, tanggal=f"2026.09.{i:02d}")  # 10 kekalahan terbaru, tanpa gelar
+        d = kekalahan(self.conn, [1], lawan="gelar", batas=3)
+        self.assertEqual([p["id"] for p in d["partai"]], [1])
+        self.assertEqual(len(kekalahan(self.conn, [1], lawan="semua", batas=3)["partai"]), 3)
+
+    def test_pemain_sebagai_hitam_juga_disaring_dari_sisi_lawan(self):
+        self.conn.execute(
+            "INSERT INTO partai(id,putih_id,hitam_id,hasil,pgn,sumber,hash_unik,diimpor_pada,"
+            "tanggal,kontrol_waktu,format,jumlah_langkah,elo_putih,elo_hitam) "
+            "VALUES(50,2,1,'1-0',?,'uji','h50',?,'2026.09.01','180+0','blitz',40,2600,1800)",
+            (PGN_WAKTU, sekarang()))
+        self.conn.commit()
+        self.assertEqual([p["id"] for p in kekalahan(self.conn, [1], lawan="gelar")["partai"]], [50])
+        self.assertEqual([p["id"] for p in kekalahan(self.conn, [1], lawan="2200")["partai"]], [50])
 
     def test_ikhtisar_dan_isi_baris(self):
         self.partai(1, 2, 2600)

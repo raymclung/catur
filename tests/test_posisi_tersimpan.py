@@ -77,3 +77,21 @@ class UjiPosisiTersimpan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UjiBatasMasukan(unittest.TestCase):
+    """Audit 28 Sep 2026: judul 5 MB diterima, halfmove 20 digit tersimpan."""
+
+    def test_hitungan_langkah_mustahil_ditolak(self):
+        from app.posisi_tersimpan import _fen_sah
+        with self.assertRaises(ValueError):
+            _fen_sah("4k3/8/8/8/8/8/8/4K3 w - - 99999999999999999999 1")
+        with self.assertRaises(ValueError):
+            _fen_sah("4k3/8/8/8/8/8/8/4K3 w - - 0 5000")
+        self.assertTrue(_fen_sah("4k3/8/8/8/8/8/8/4K3 w - - 100 80"))
+
+    def test_judul_terlalu_panjang_422(self):
+        from pydantic import ValidationError
+        from app.main import PosisiBaru
+        with self.assertRaises(ValidationError):
+            PosisiBaru(fen="4k3/8/8/8/8/8/8/4K3 w - - 0 1", judul="x" * 201)

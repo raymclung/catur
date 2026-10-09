@@ -13,6 +13,7 @@ Engine tidak pernah dinyalakan di sini: peluncuran dipalsukan.
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 AKAR = Path(__file__).resolve().parents[1]
@@ -46,6 +47,11 @@ def tearDownModule():
 
 class Dasar(unittest.TestCase):
     def setUp(self):
+        # Penjaga menulis catatannya ke stdout; di tes itu cuma sampah yang
+        # menutupi kegagalan sungguhan (audit 21 Sep 2026), jadi dibungkam.
+        self._catat_asli = jaga._catat
+        jaga._catat = lambda pesan: None
+        self.addCleanup(lambda: setattr(jaga, "_catat", self._catat_asli))
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "antrean.json"
         self.asli_path = antrean.PATH_ANTREAN
@@ -110,17 +116,35 @@ class Penjaga(Dasar):
 
     def setUp(self):
         super().setUp()
-        self.asli = (jaga._pindai_batch, jaga.luncurkan, jaga._ada_yang_belum)
+        self.asli = (jaga._pindai_batch, jaga.batch_berjalan, jaga.luncurkan,
+                     jaga._ada_yang_belum, jaga.masih_hidup)
+        self.hidup_os = set()                # PID yang menurut Windows masih ada
+        # satu_putaran() menerapkan batas CPU ke proses NYATA (Stockfish yang
+        # sedang jalan + PID palsu 100..103). Tes tidak boleh menyentuhnya
+        # (audit 28 Sep 2026).
+        from app import batas_cpu
+        tambalan = mock.patch.object(batas_cpu, "terapkan_semua", lambda *a, **k: {})
+        tambalan.start()
+        self.addCleanup(tambalan.stop)
         self.diluncurkan = []
         self.belum = set()                   # (sumber, bagian) yang masih punya partai belum dianalisis
         jaga._ada_yang_belum = lambda sumber, bagian: (sumber, bagian) in self.belum
 
     def tearDown(self):
-        jaga._pindai_batch, jaga.luncurkan, jaga._ada_yang_belum = self.asli
+        (jaga._pindai_batch, jaga.batch_berjalan, jaga.luncurkan,
+         jaga._ada_yang_belum, jaga.masih_hidup) = self.asli
         super().tearDown()
 
     def pasang(self, berjalan=0, hasil=None, galat=None):
-        jaga._pindai_batch = lambda: [{"pid": 100 + i} for i in range(berjalan)]
+        palsu_jalan = [{"pid": 100 + i} for i in range(berjalan)]
+        jaga._pindai_batch = lambda: palsu_jalan
+        # Penjaga menghitung slot lewat batch_berjalan() (pindaian + catatan
+        # tugas) sejak perbaikan 25 Sep 2026; itu yang harus dipalsukan.
+        jaga.batch_berjalan = lambda: palsu_jalan
+        # Bukti kedua (Windows) dipalsukan juga: PID palsu 999 bisa saja milik
+        # proses sungguhan di laptop ini.
+        jaga.masih_hidup = lambda pid, sejak=None: (
+            pid in {b["pid"] for b in palsu_jalan} or pid in self.hidup_os)
 
         def palsu(s):
             if galat:
@@ -241,6 +265,19 @@ class Penjaga(Dasar):
         jaga.segarkan_status()
         self.assertEqual(antrean.baca()[0]["status"], "gagal")
 
+    def test_pindaian_luput_tapi_proses_masih_ada_tidak_diantrekan_ulang(self):
+        """27 Sep 17:03: pindaian sesaat tidak melihat 22436 yang masih hidup,
+        penjaga mencapnya terputus lalu meluncurkan kembarannya (29292)."""
+        log = Path(self.tmp.name) / "log4.txt"
+        log.write_text("25 partai dipilih\n  [2/25] ...\n", encoding="utf-8")
+        k = antrean.tambah(SARINGAN, "a")
+        antrean.perbarui(k["id"], status="jalan", pid=22436, log=str(log))
+        self.pasang(berjalan=0)                      # pindaian tidak melihatnya
+        self.hidup_os = {22436}                      # ... tapi Windows masih punya PID-nya
+        jaga.segarkan_status()
+        self.assertEqual(antrean.baca()[0]["status"], "jalan")
+        self.assertEqual(self.diluncurkan, [])
+
     def test_tidak_berhenti_selama_masih_ada_yang_jalan(self):
         """
         Cacat 13 Sep: tidak ada yang MENUNGGU dianggap antrean habis, jadi
@@ -321,7 +358,15 @@ class Pendaftaran(Dasar):
         """Tugas logon tidak boleh menyalakan penjaga kedua di atas yang sudah ada."""
         import os
         asli = jaga._pindai_proses
-        jaga._pindai_proses = lambda nama: [{"pid": os.getpid()}, {"pid": 999123}]
+        jaga._pindai_proses = lambda nama: [
+            {"pid": os.getpid(), "perintah": "python jaga_antrean.py --jaga"},
+            {"pid": 999123, "perintah": "python jaga_antrean.py --jaga"}]
+        # penjaga 999123 menyala LEBIH DULU; sejak 29 Sep hanya yang lebih
+        # muda yang mundur (lihat DuaPenjagaSerentak)
+        lahir = mock.patch("app.proses.waktu_lahir_proses",
+                           side_effect=lambda pid: 0.0 if pid == 999123 else 100.0)
+        lahir.start()
+        self.addCleanup(lahir.stop)
         try:
             # fungsi ASLI, bukan yang dipalsukan setUp untuk tes lain
             self.assertEqual(self.asli_lain(), 999123)
@@ -333,3 +378,186 @@ class Pendaftaran(Dasar):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UjiBersihkanRiwayat(unittest.TestCase):
+    """Ray, 25 Sep 2026: riwayat menumpuk dan harus dibuang satu per satu."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "antrean.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def isi(self, *status):
+        daftar = [{"id": i + 1, "status": s, "saringan": {}} for i, s in enumerate(status)]
+        antrean.tulis(daftar, self.path)
+
+    def test_hanya_riwayat_yang_dibuang(self):
+        self.isi("selesai", "menunggu", "gagal", "jalan", "batal", "menunggu")
+        self.assertEqual(antrean.bersihkan_riwayat(self.path), 3)
+        sisa = [(d["id"], d["status"]) for d in antrean.baca(self.path)]
+        self.assertEqual(sisa, [(2, "menunggu"), (4, "jalan"), (6, "menunggu")])
+
+    def test_tanpa_riwayat_tidak_mengubah_apa_pun(self):
+        self.isi("menunggu", "jalan")
+        self.assertEqual(antrean.bersihkan_riwayat(self.path), 0)
+        self.assertEqual(len(antrean.baca(self.path)), 2)
+
+
+class SaringanKembar(Penjaga):
+    """Pekerjaan kembar dengan batch yang jalan: ditunda, bukan digagalkan."""
+
+    def test_kembar_tetap_menunggu(self):
+        from fastapi import HTTPException
+        self.pasang(berjalan=0, galat=HTTPException(
+            status_code=409,
+            detail="Batch dengan saringan yang sama persis sedang berjalan (PID 111), "
+                   "jadi keduanya akan mengerjakan partai yang sama."))
+        antrean.tambah({"terbaru": 5, "profil": "cepat"}, "uji", 5, path=self.path)
+        jaga.satu_putaran(maks=2)
+        k = antrean.baca(self.path)[0]
+        self.assertEqual(k["status"], "menunggu")
+        self.assertIsNone(k.get("alasan"))
+
+
+class AdaYangBelum(unittest.TestCase):
+    """
+    _ada_yang_belum() pada database sungguhan (tes lain memalsukannya).
+
+    Audit 27 Sep 2026: partai '*' dihitung "belum dianalisis" padahal
+    analisis_partai.py tidak pernah memilihnya, sehingga penjaga menambah
+    pekerjaan kosong tanpa henti.
+    """
+
+    def setUp(self):
+        from unittest import mock
+        from app.db import buat_skema, koneksi, sekarang
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "uji.db"
+        conn = koneksi(db)
+        buat_skema(conn)
+        t = sekarang()
+        conn.execute("INSERT INTO pemain(id,nama,nama_normal,dibuat_pada) VALUES(1,'A','a',?)", (t,))
+        conn.execute("INSERT INTO pemain(id,nama,nama_normal,dibuat_pada) VALUES(2,'B','b',?)", (t,))
+        conn.commit()
+        self.conn = conn
+        tambal = mock.patch("app.db.koneksi", lambda path=None: koneksi(db))
+        tambal.start()
+        self.addCleanup(tambal.stop)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def partai(self, id_, hasil):
+        from app.db import sekarang
+        self.conn.execute(
+            "INSERT INTO partai(id,putih_id,hitam_id,hasil,pgn,sumber,hash_unik,diimpor_pada,jumlah_langkah) "
+            "VALUES(?,1,2,?,'x','twic',?,?,40)", (id_, hasil, f"h{id_}", sekarang()))
+        self.conn.commit()
+
+    def test_partai_belum_selesai_tidak_dihitung(self):
+        self.partai(4, "*")                                  # 4 % 2 = 0
+        self.assertFalse(jaga._ada_yang_belum("gm", "0/2"))
+
+    def test_partai_selesai_dihitung(self):
+        self.partai(4, "*")
+        self.partai(6, "1-0")
+        self.assertTrue(jaga._ada_yang_belum("gm", "0/2"))
+        self.assertFalse(jaga._ada_yang_belum("gm", "1/2"))  # bagian lain kosong
+
+
+class PindaiProses(unittest.TestCase):
+    """app/proses.py: pindaian yang gagal tidak boleh dibaca "tidak ada batch"."""
+
+    def test_keluaran_kosong_atau_gagal_melempar(self):
+        import subprocess
+        from app import proses
+        for kode, isi in ((0, ""), (1, "123\tx\tpython analisis_partai.py")):
+            palsu = subprocess.CompletedProcess([], kode, stdout=isi, stderr="")
+            with mock.patch.object(proses.subprocess, "run", return_value=palsu):
+                with self.assertRaises(RuntimeError):
+                    proses._keluaran_proses("analisis_partai.py")
+
+    def test_pindaian_gagal_memakai_hasil_terakhir(self):
+        from app import proses
+        simpan = proses._pindai.get("uji.py")
+        proses._pindai["uji.py"] = {"waktu": 0.0, "hasil": [{"pid": 7, "perintah": "x"}]}
+        proses._pindai["waktu"] = 0.0
+        try:
+            with mock.patch.object(proses, "_keluaran_proses", side_effect=RuntimeError("x")):
+                self.assertEqual([b["pid"] for b in proses._pindai_proses("uji.py")], [7])
+        finally:
+            proses._pindai.pop("uji.py", None)
+            if simpan is not None:
+                proses._pindai["uji.py"] = simpan
+
+    def test_perintah_tidak_dipotong(self):
+        import subprocess
+        from app import proses
+        panjang = ("C:\\Users\\X\\AppData\\Local\\Microsoft\\WindowsApps\\" + "a" * 120 +
+                   "\\python.exe -X utf8 -u analisis_partai.py --sumber gm --bagian 0/2 "
+                   "--terbaru 2000 --profil cepat --terlama")
+        palsu = subprocess.CompletedProcess([], 0, stdout=f"55\tx\t{panjang}\n", stderr="")
+        with mock.patch.object(proses.subprocess, "run", return_value=palsu):
+            hasil = proses._keluaran_proses("analisis_partai.py")
+        self.assertTrue(hasil[0]["perintah"].endswith("--terlama"))
+
+    def test_masih_hidup_butuh_dua_bukti_dan_menolak_pid_bekas(self):
+        from datetime import datetime
+        from app import proses
+        sejak = "2026-09-27 16:14"
+        t0 = datetime.strptime(sejak, "%Y-%m-%d %H:%M").timestamp()
+        with mock.patch.object(proses, "_pindai_batch", return_value=[]):
+            with mock.patch.object(proses, "_proses_ada", return_value=False):
+                self.assertFalse(proses.masih_hidup(5, sejak))            # dua bukti: mati
+            with mock.patch.object(proses, "_proses_ada", return_value=True):
+                with mock.patch.object(proses, "waktu_lahir_proses", return_value=t0 - 5):
+                    self.assertTrue(proses.masih_hidup(5, sejak))         # batch kita
+                with mock.patch.object(proses, "waktu_lahir_proses", return_value=t0 + 3600):
+                    self.assertFalse(proses.masih_hidup(5, sejak))        # PID bekas pakai
+        with mock.patch.object(proses, "_pindai_batch", return_value=[{"pid": 5}]):
+            self.assertTrue(proses.masih_hidup(5, sejak))
+
+    def test_waktu_lahir_proses_ini_masuk_akal(self):
+        import os
+        import time
+        from app import proses
+        lahir = proses.waktu_lahir_proses(os.getpid())
+        if lahir is None:
+            self.skipTest("bukan Windows")
+        self.assertLess(abs(time.time() - lahir), 24 * 3600)
+
+
+class DuaPenjagaSerentak(unittest.TestCase):
+    """29 Sep 18:49:33: dua penjaga menyala bersamaan dan KEDUANYA berhenti."""
+
+    def cek(self, saya):
+        daftar = [{"pid": 4272, "perintah": "python -u jaga_antrean.py --jaga --maks 2"},
+                  {"pid": 15276, "perintah": "python -u jaga_antrean.py --jaga --maks 2"},
+                  {"pid": 999, "perintah": "python jaga_antrean.py --lihat"}]
+        lahir = {4272: 1000.0, 15276: 1000.4, 999: 1.0}
+        with mock.patch.object(jaga, "_pindai_proses", return_value=daftar), \
+                mock.patch("app.proses.waktu_lahir_proses", side_effect=lahir.get), \
+                mock.patch("os.getpid", return_value=saya):
+            return jaga.penjaga_lain_jalan()
+
+    def test_tepat_satu_yang_mengalah(self):
+        self.assertIsNone(self.cek(4272))          # yang lebih tua jalan terus
+        self.assertEqual(self.cek(15276), 4272)    # yang lebih muda mengalah
+
+    def test_bukan_penjaga_tidak_dihitung(self):
+        """`jaga_antrean.py --lihat` (PID 999, lahir paling awal) bukan penjaga."""
+        self.assertIsNone(self.cek(4272))
+
+    def test_waktu_lahir_sama_ditentukan_pid(self):
+        daftar = [{"pid": 20, "perintah": "jaga_antrean.py --jaga"},
+                  {"pid": 10, "perintah": "jaga_antrean.py --jaga"}]
+        with mock.patch.object(jaga, "_pindai_proses", return_value=daftar), \
+                mock.patch("app.proses.waktu_lahir_proses", return_value=5.0):
+            with mock.patch("os.getpid", return_value=10):
+                self.assertIsNone(jaga.penjaga_lain_jalan())
+            with mock.patch("os.getpid", return_value=20):
+                self.assertEqual(jaga.penjaga_lain_jalan(), 10)

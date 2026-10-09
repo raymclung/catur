@@ -37,20 +37,20 @@ import re
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
 import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from .db import koneksi
+from .db import FOLDER_DATA, koneksi
 
 router = APIRouter(prefix="/api/analisa", tags=["analisa"])
 
 AKAR = Path(__file__).resolve().parents[1]
-FOLDER_LOG = AKAR / "data" / "laporan"
 
 # Database yang dipakai halaman ini. None = data/catur.db bawaan. Tes mengisinya
 # dengan database sementara: tanpa ini dua tes diam-diam membaca database Ray
@@ -63,10 +63,8 @@ def _buka() -> sqlite3.Connection:
     # koneksi() tanpa argumen saat PATH_DB kosong: tes lain mengganti `koneksi`
     # dengan fungsi tanpa parameter, dan itu harus tetap bekerja.
     return koneksi() if PATH_DB is None else koneksi(PATH_DB)
-PATH_TUGAS = AKAR / "data" / "tugas-analisa.json"
 
 # Tugas yang disimpan di catatan; yang lebih lama dibuang.
-MAKS_TUGAS = 20
 
 # Batas jumlah partai per batch. Bukan batas teknis melainkan rem: 2.000
 # partai profil hemat sudah belasan jam. Batch raksasa tetap lewat terminal.
@@ -84,35 +82,64 @@ JEDA_PINDAI = 15.0
 TANPA_JENDELA = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 _pindai: dict = {"waktu": 0.0, "hasil": []}
 
-GELAR_VALID = ("GM", "IM", "FM", "CM", "WGM", "WIM", "WFM", "WCM", "NM")
+# WNM ikut sejak 25 Sep 2026: gelarnya ada di database (dan datang dari
+# Chess.com), tapi dulu tidak bisa dipilih di --gelar-lawan maupun halaman
+# Mesin, jadi partai lawan ber-WNM tidak pernah bisa disaring.
+GELAR_VALID = ("GM", "IM", "FM", "CM", "WGM", "WIM", "WFM", "WCM", "NM", "WNM")
 FORMAT_VALID = ("bullet", "blitz", "rapid", "klasik", "tanpa")
-HASIL_VALID = ("kalah", "menang", "remis")
+HASIL_VALID = ("kalah", "menang", "remis", "menang-kalah")
 
-POLA_MAJU = re.compile(r"\[(\d+)/(\d+)\]")
-POLA_SISA = re.compile(r"sisa ~(\d+)m")
-POLA_DIPILIH = re.compile(r"^(\d+) partai dipilih")
 
 
 class Saringan(BaseModel):
     """Saringan pemilihan partai — namanya sama dengan flag CLI-nya."""
 
-    id: list[int] | None = Field(None, description="id partai tertentu")
+    # Batas ukuran (audit 28 Sep 2026): 39.999 id dulu 500 "too many SQL
+    # variables", nama pemain 100.000 aksara 500 "LIKE pattern too complex".
+    id: list[int] | None = Field(None, max_length=MAKS_PARTAI, description="id partai tertentu")
     sumber: str | None = Field(None, pattern=r"^[a-z0-9-]{2,30}$",
                                description="label sumber seperti tersimpan di database")
-    pemain: list[str] | None = Field(None, description="potongan nama pemain")
+    pemain: list[str] | None = Field(None, max_length=20, description="potongan nama pemain")
     min_elo: int | None = Field(None, ge=1000, le=3000, description="KEDUA pemain minimal sekian")
     lawan_min_elo: int | None = Field(None, ge=1000, le=3000, description="lawan Ray minimal sekian")
-    gelar_lawan: list[str] | None = None
+    gelar_lawan: list[str] | None = Field(None, max_length=20)
     hasil: str | None = Field(None, description=" | ".join(HASIL_VALID))
     format: str | None = Field(None, description=" | ".join(FORMAT_VALID))
     terbaru: int = Field(50, ge=1, le=MAKS_PARTAI, description="jumlah partai terbaru")
+    terlama: bool = Field(False, description="kerjakan dari partai terlama dulu; diisi "
+                                             "otomatis kalau batch kembar sedang jalan")
     min_langkah: int = Field(10, ge=0, le=200)
     repertoire: bool = Field(False, description="hanya pembukaan repertoire Ray "
                                                 "(English, Catalan, Ragozin, Sicilian)")
     ulang: bool = False
+    dangkal: bool = Field(False, description="hanya partai yang analisisnya masih kasar "
+                                             "(profil cepat/lichess) — untuk memperdalam")
     profil: str = Field("hemat", pattern=r"^(cepat|hemat|normal|dalam)$")
     bagian: str | None = Field(None, pattern=r"^\d{1,2}/\d{1,2}$",
                                description="K/N: hanya partai id % N == K (pengisi slot penjaga)")
+
+    @field_validator("pemain", "gelar_lawan")
+    @classmethod
+    def _teks_pendek_dan_bisa_disimpan(cls, v):
+        for t in v or []:
+            if len(t) > 100:
+                raise ValueError("teks terlalu panjang (maks 100 aksara)")
+            try:
+                t.encode("utf-8")
+            except UnicodeEncodeError as e:
+                raise ValueError("teks berisi karakter yang tidak bisa dipakai") from e
+        return v
+
+    @field_validator("bagian")
+    @classmethod
+    def _bagian_masuk_akal(cls, v):
+        # "1/0", "0/0", "3/2" dulu lolos pola lalu diam-diam memilih 0 partai,
+        # dan antrean menjawab "mungkin semuanya sudah dianalisis" — menyesatkan.
+        if v is not None:
+            k, n = (int(x) for x in v.split("/"))
+            if n < 1 or k >= n:
+                raise ValueError("bagian K/N harus 0 <= K < N")
+        return v
 
 
 class Penghentian(BaseModel):
@@ -146,6 +173,13 @@ def _modul():
 SUMBER_SAYA = ("lichess-user", "chesscom")
 
 
+# Partai yang bisa dipilih analisis_partai.pilih_partai() tanpa --id: bawaan
+# --min-langkah 10, dan hasil '*' disaring sejak 25 Sep 2026. Semua angka
+# "belum dianalisis" harus memakai syarat yang SAMA, kalau tidak halaman
+# menjanjikan partai yang tidak akan pernah terpilih.
+SYARAT_BISA_DIPILIH = "g.jumlah_langkah >= 10 AND g.hasil <> '*'"
+
+
 def daftar_sumber(conn: sqlite3.Connection) -> list[dict]:
     """
     Label sumber yang benar-benar ada di database, beserta jumlahnya.
@@ -153,10 +187,21 @@ def daftar_sumber(conn: sqlite3.Connection) -> list[dict]:
     Sengaja tidak ditulis sebagai daftar tetap: halaman Impor membiarkan Ray
     memberi label sendiri, jadi daftar tertulis di kode pasti ketinggalan.
     """
-    q = """
+    # "belum" = yang BISA dipilih pilih_partai(): >= 10 langkah dan hasilnya
+    # bukan '*'. Tanpa itu angkanya tidak pernah nol (28 Sep 2026: "1 partai
+    # GM belum", Tal-Tukmakov 1983 ber-'*', tapi Mulai menjawab 0 partai).
+    #
+    # Semua kolom yang dibaca ada di idx_partai_bisa_dipilih (skema v12), jadi
+    # tabel partai — yang barisnya memuat PGN lengkap — tidak disentuh sama
+    # sekali; analisis dicek lewat indeks uniknya. Dulu tiga kueri memindai
+    # seluruh partai: 10 detik tiap cache angka habis saat disk dingin
+    # (29 Sep 2026), padahal halaman Mesin bertanya tiap 5 detik.
+    q = f"""
         SELECT g.sumber AS nama, COUNT(*) AS partai,
-               SUM(CASE WHEN a.partai_id IS NULL THEN 1 ELSE 0 END) AS belum
-        FROM partai g LEFT JOIN analisis a ON a.partai_id = g.id
+               SUM(CASE WHEN a.partai_id IS NULL AND {SYARAT_BISA_DIPILIH}
+                        THEN 1 ELSE 0 END) AS belum
+        FROM partai g
+        LEFT JOIN analisis a ON a.partai_id = g.id
         WHERE g.sumber IS NOT NULL
         GROUP BY g.sumber ORDER BY partai DESC
     """
@@ -181,7 +226,7 @@ def daftar_pemain(conn: sqlite3.Connection, sumber: str | None = None,
     `pemain`: pencocokan `--pemain` memakai nama yang dinormalisasi, jadi
     "Carlsen, Magnus" tetap cocok.
     """
-    syarat = ["a.partai_id IS NULL", "g.jumlah_langkah >= 10"]
+    syarat = ["a.partai_id IS NULL", SYARAT_BISA_DIPILIH]
     params: list = []
     if sumber:
         syarat.append("g.sumber = ?")
@@ -195,8 +240,9 @@ def daftar_pemain(conn: sqlite3.Connection, sumber: str | None = None,
     elif kelompok == "saya":
         syarat.append("p.akun_pribadi = 1")
     if cari:
-        syarat.append("p.nama LIKE ?")
-        params.append(f"%{cari.strip()}%")
+        from .repositori import pola_like      # noqa: PLC0415
+        syarat.append("p.nama LIKE ? ESCAPE '\\'")
+        params.append(pola_like(cari.strip()))
     q = f"""
         SELECT p.id, p.nama, p.gelar, COUNT(*) AS belum
         FROM partai g
@@ -250,6 +296,12 @@ def _periksa(s: Saringan) -> None:
     for g in (s.gelar_lawan or []):
         if g.upper() not in GELAR_VALID:
             raise HTTPException(status_code=422, detail=f"Gelar tidak dikenal: {g}")
+    if s.dangkal and s.profil == "cepat":
+        # memperdalam dengan profil yang sama kasarnya = partai yang sama
+        # terpilih lagi selamanya (audit 27 Sep 2026)
+        raise HTTPException(status_code=422,
+                            detail="Memperdalam analisis kasar butuh profil hemat atau lebih "
+                                   "teliti; dengan profil cepat hasilnya tetap kasar.")
     # Tanpa saringan sama sekali BOLEH: `terbaru` selalu ada dan dibatasi
     # MAKS_PARTAI, jadi "analisis apa saja, yang terbaru dulu" tetap terbatas.
     # Dulu ini ditolak karena takut seluruh database ikut terjaring — ketakutan
@@ -266,7 +318,8 @@ def _ruang_nama(s: Saringan) -> SimpleNamespace:
         gelar_lawan=[g.upper() for g in s.gelar_lawan] if s.gelar_lawan else None,
         lawan_min_elo=s.lawan_min_elo, hasil=s.hasil, format_=s.format,
         terbaru=s.terbaru, min_langkah=s.min_langkah, ulang=s.ulang,
-        repertoire=s.repertoire, bagian=s.bagian,
+        dangkal=s.dangkal, repertoire=s.repertoire, bagian=s.bagian,
+        terlama=s.terlama,
     )
 
 
@@ -293,11 +346,15 @@ def _perintah(s: Saringan) -> list[str]:
         p += ["--repertoire"]
     if s.ulang:
         p += ["--ulang"]
+    if s.dangkal:
+        p += ["--dangkal"]
     if s.min_langkah != 10:
         p += ["--min-langkah", str(s.min_langkah)]
     if s.bagian:
         p += ["--bagian", s.bagian]
     p += ["--terbaru", str(s.terbaru), "--profil", s.profil]
+    if s.terlama:
+        p += ["--terlama"]
     if PATH_DB is not None:
         p += ["--db", str(PATH_DB)]
     return p
@@ -376,209 +433,29 @@ def _hitung(s: Saringan) -> dict:
 MAKS_BATCH = 2
 
 
-def _pindai_proses(nama_skrip: str) -> list[dict]:
-    """
-    Proses python yang baris perintahnya memuat nama skrip itu.
-
-    Dipakai untuk batch analisis DAN untuk penjaga antrean, supaya
-    keduanya dibaca dari kenyataan (daftar proses), bukan dari catatan
-    yang bisa basi.
-    """
-    simpanan = _pindai.setdefault(nama_skrip, {"waktu": 0.0, "hasil": []})
-    sekarang = time.time()
-    # `_pindai["waktu"] = 0` dipakai pemanggil untuk memaksa pindai ulang
-    # (mis. tepat sebelum meluncurkan batch), jadi ia ikut dilihat di sini.
-    paksa = not _pindai["waktu"]
-    if not paksa and sekarang - simpanan["waktu"] < JEDA_PINDAI:
-        return simpanan["hasil"]
-
-    try:
-        hasil = _keluaran_proses(nama_skrip)
-    except Exception:
-        return simpanan["hasil"]      # tidak bisa memeriksa: jangan mengarang
-    simpanan.update(waktu=sekarang, hasil=hasil)
-    _pindai["waktu"] = sekarang       # paksaan sudah dipakai
-    return hasil
-
-
-def _pindai_batch() -> list[dict]:
-    """
-    Batch analisis yang benar-benar berjalan, dibaca dari daftar proses.
-
-    Termasuk batch yang diluncurkan dari terminal oleh sesi lain — itu justru
-    intinya: halaman ini tidak boleh menawarkan tombol Mulai kalau engine
-    sudah dipakai.
-    """
-    return _pindai_proses("analisis_partai.py")
-
-
-def _keluaran_proses(nama_skrip: str) -> list[dict]:
-    """Baca daftar proses, kembalikan yang baris perintahnya cocok."""
-    hasil: list[dict] = []
-    if os.name == "nt":
-        perintah = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
-                    "ForEach-Object { \"$($_.ProcessId)`t$($_.CreationDate)`t$($_.CommandLine)\" }")
-        keluaran = subprocess.run(["powershell", "-NoProfile", "-Command", perintah],
-                                  capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=30,
-                                  creationflags=TANPA_JENDELA).stdout
-        pemisah = "	"
-    else:
-        keluaran = subprocess.run(["ps", "-eo", "pid=,lstart=,args="],
-                                  capture_output=True, text=True, timeout=30).stdout
-        pemisah = None
-    for baris in keluaran.splitlines():
-        bagian = baris.split(pemisah, 2) if pemisah else baris.split(None, 2)
-        if len(bagian) < 3 or not bagian[0].strip().isdigit():
-            continue
-        pid, mulai, perintah_proses = bagian[0].strip(), bagian[1].strip(), bagian[2]
-        if nama_skrip not in perintah_proses or "Get-CimInstance" in perintah_proses:
-            continue
-        hasil.append({"pid": int(pid), "mulai": mulai,
-                      "perintah": " ".join(perintah_proses.split())[:200]})
-    return hasil
-
-def _proses_ada(pid: int) -> bool:
-    """
-    Apakah PID itu masih ada? Murah: tanya langsung ke Windows, tanpa
-    menjalankan proses baru.
-    """
-    if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
-    import ctypes
-    SINKRONISASI = 0x00100000
-    MASIH_HIDUP = 259
-    k32 = ctypes.windll.kernel32
-    h = k32.OpenProcess(SINKRONISASI | 0x0400, False, pid)   # 0x400 = QUERY_INFORMATION
-    if not h:
-        return False
-    try:
-        kode = ctypes.c_ulong()
-        if k32.GetExitCodeProcess(h, ctypes.byref(kode)):
-            return kode.value == MASIH_HIDUP
-        return True
-    finally:
-        k32.CloseHandle(h)
-
-
-def _matikan(pid: int, pohon: bool = True) -> None:
-    """
-    Hentikan satu proses beserta anaknya (Stockfish ikut mati), lalu
-    TUNGGU sampai benar-benar hilang.
-
-    Tanpa penantian itu, pemindaian berikutnya masih melihatnya dan
-    jawaban jadi salah — terjadi nyata 13 Sep 2026: penjaga dimatikan,
-    lalu permintaan menghidupkan dijawab "sudah jalan" dengan PID yang
-    sudah mati, sehingga tidak ada penjaga yang berjalan sama sekali.
-    """
-    try:
-        if os.name == "nt":
-            # /T menyapu seluruh keturunan. Untuk BATCH itu perlu (Stockfish
-            # ikut mati), tapi untuk PENJAGA justru salah: batch yang ia
-            # jalankan adalah anaknya, jadi "Matikan penjaga" ikut membunuh
-            # semua batch — terjadi nyata 13 Sep 2026, #1 mati tiga kali.
-            argumen = ["taskkill", "/PID", str(pid)] + (["/T"] if pohon else []) + ["/F"]
-            subprocess.run(argumen,
-                           capture_output=True, timeout=30,
-                           creationflags=TANPA_JENDELA)
-        else:
-            import signal
-            if pohon:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-            else:
-                os.kill(pid, signal.SIGTERM)
-    except Exception as e:      # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Gagal menghentikan: {e}") from e
-
-    batas = time.time() + 5
-    while _proses_ada(pid) and time.time() < batas:
-        time.sleep(0.2)
-    _pindai["waktu"] = 0.0          # pindaian lama sudah tidak sahih
-
-
-def _hidup(pid: int) -> bool:
-    return any(b["pid"] == pid for b in _pindai_batch())
-
+# Melihat & mematikan proses batch pindah ke app/proses.py (audit 21 Sep 2026:
+# berkas ini terlalu besar). Nama-namanya diimpor ulang di sini supaya
+# pemanggil lama — termasuk jaga_antrean.py dan tes — tidak perlu diubah.
+from .proses import (JEDA_PINDAI, TANPA_JENDELA, _hidup, _keluaran_proses,   # noqa: E402,F401
+                     _matikan, _pindai, _pindai_batch, _pindai_proses, _proses_ada)
 
 # ------------------------------------------------------------ catatan tugas
 
-def _baca_tugas() -> list[dict]:
-    try:
-        return json.loads(PATH_TUGAS.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def _tulis_tugas(daftar: list[dict]) -> None:
-    PATH_TUGAS.parent.mkdir(parents=True, exist_ok=True)
-    PATH_TUGAS.write_text(json.dumps(daftar[-MAKS_TUGAS:], indent=1, ensure_ascii=False),
-                          encoding="utf-8", newline="\n")
-
-
-def _status_akhir(path_log: Path) -> tuple[str, str]:
-    """
-    ("selesai" | "gagal", alasan) untuk batch yang prosesnya sudah tidak ada.
-
-    Kenapa tidak cukup "prosesnya hilang berarti selesai": pada 12 Sep 2026 dua
-    batch mati dengan `EngineTerminatedError ... exit code 3221225786`
-    (0xC000013A = STATUS_CONTROL_C_EXIT — jendela konsolnya ditutup) tapi tetap
-    dilabeli "selesai", padahal baru 2 dari 25 partai. Label yang bohong lebih
-    berbahaya daripada tidak ada label: Ray mengira pekerjaannya beres.
-
-    Penanda selesai yang benar = baris penutup `analisis_partai.py`:
-    "selesai N, gagal M, ... menit  |  database: ...". Kalau baris itu tidak
-    ada, batch berhenti sebelum waktunya.
-    """
-    try:
-        baris = [b for b in path_log.read_text(encoding="utf-8", errors="replace").splitlines()
-                 if b.strip()]
-    except OSError:
-        return "gagal", "berkas log tidak terbaca"
-    if any(b.startswith("selesai ") and " menit" in b for b in baris[-6:]):
-        return "selesai", ""
-    for b in reversed(baris):
-        # Baris galat Python terakhir paling menjelaskan sebabnya.
-        if "Error" in b or "error" in b:
-            return "gagal", b.strip()[:160]
-    if any("Dihentikan" in b for b in baris[-4:]):
-        return "dihentikan", "dihentikan di tengah jalan"
-    return "gagal", "berhenti sebelum baris penutup muncul"
-
-
-def _kemajuan(path_log: Path) -> dict:
-    """Baca kemajuan dari ekor berkas log batch."""
-    try:
-        teks = path_log.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return {}
-    baris = [b for b in teks.splitlines() if b.strip()]
-    maju = {}
-    for b in reversed(baris):
-        m = POLA_MAJU.search(b)
-        if m:
-            maju["selesai"], maju["dari"] = int(m.group(1)), int(m.group(2))
-            sisa = POLA_SISA.search(b)
-            if sisa:
-                maju["sisa_menit"] = int(sisa.group(1))
-            break
-    for b in baris:
-        m = POLA_DIPILIH.match(b)
-        if m:
-            maju.setdefault("dari", int(m.group(1)))
-            break
-    maju["ekor"] = baris[-6:]
-    return maju
+# Catatan tugas & pembacaan kemajuan pindah ke app/tugas_batch.py
+# (audit 22 Sep 2026). Diimpor ulang supaya pemanggil lama tetap jalan.
+from .tugas_batch import (FOLDER_LOG, MAKS_TUGAS, PATH_TUGAS, POLA_DIPILIH,   # noqa: E402,F401
+                          POLA_MAJU, POLA_SISA, _baca_tugas, _kemajuan,
+                          _rangkum_tugas, _status_akhir, _tulis_tugas,
+                          bersihkan_kemajuan_yatim, kemajuan_proses, ubah_tugas)
 
 
 # Angka database untuk halaman Mesin: berubah beberapa per menit, tapi
 # halaman itu bertanya tiap 5 detik selagi batch jalan. Menghitungnya tiap kali
 # berarti menyisir 266 ribu partai berulang-ulang — 0,6 detik sekali hitung,
 # tepat saat mesin sedang sibuk dengan empat engine. Ditahan sebentar saja.
-JEDA_ANGKA = 10.0
+# 60 detik: angka ini berubah beberapa per menit, dan kemajuan batch di halaman
+# Mesin dibaca dari log masing-masing, bukan dari sini.
+JEDA_ANGKA = 60.0
 _angka: dict = {"waktu": 0.0, "hasil": None}
 
 
@@ -590,84 +467,18 @@ def angka_database(conn: sqlite3.Connection) -> dict:
     if _angka["hasil"] is not None and sekarang - _angka["waktu"] < JEDA_ANGKA:
         return _angka["hasil"]
 
-    tanda = ",".join("?" * len(SUMBER_SAYA))
-    pola = f"""
-        SELECT SUM(CASE WHEN g.sumber IN ({tanda}) THEN 1 ELSE 0 END) AS saya,
-               SUM(CASE WHEN g.sumber NOT IN ({tanda}) THEN 1 ELSE 0 END) AS gm
-    """
-    p2 = list(SUMBER_SAYA) * 2
-    total = conn.execute(pola + " FROM partai g WHERE g.jumlah_langkah >= 10", p2).fetchone()
-    sudah = conn.execute(
-        pola + " FROM analisis a JOIN partai g ON g.id = a.partai_id"
-               " WHERE g.jumlah_langkah >= 10", p2).fetchone()
+    # "belum" per sumber sudah dihitung daftar_sumber() dengan syarat yang sama
+    # (bisa dipilih DAN belum dianalisis); dulu dihitung ulang lewat dua kueri
+    # lain yang masing-masing memindai seluruh tabel partai.
+    sumber = daftar_sumber(conn)
     hasil = {
         "statistik": statistik_analisis(conn),
-        "sumber": daftar_sumber(conn),
-        "belum_saya": (total["saya"] or 0) - (sudah["saya"] or 0),
-        "belum_gm": (total["gm"] or 0) - (sudah["gm"] or 0),
+        "sumber": sumber,
+        "belum_saya": sum(s["belum"] for s in sumber if s["pribadi"]),
+        "belum_gm": sum(s["belum"] for s in sumber if not s["pribadi"]),
     }
     _angka.update(waktu=sekarang, hasil=hasil)
     return hasil
-
-
-def kemajuan_proses(pid: int) -> dict:
-    """
-    Kemajuan batch yang dijalankan dari TERMINAL.
-
-    Halaman ini hanya tahu berkas log batch yang diluncurkannya sendiri. Batch
-    dari terminal mengarahkan keluarannya ke mana saja, jadi `analisis_partai.py`
-    menulis catatan kecil bernama PID-nya (lihat tulis_kemajuan di sana) dan di
-    sini tinggal dibaca. Ray, 12 Sep: "saya tidak melihat persentasenya".
-    """
-    berkas = AKAR / "data" / "laporan" / f".kemajuan-{pid}.json"
-    try:
-        d = json.loads(berkas.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    keluar = {k: d[k] for k in ("selesai", "dari", "sisa_menit", "mulai") if k in d}
-    if keluar.get("dari"):
-        keluar["persen"] = round(100 * keluar.get("selesai", 0) / keluar["dari"], 1)
-    return keluar
-
-
-def bersihkan_kemajuan_yatim(hidup: set[int]) -> None:
-    """Buang catatan kemajuan milik proses yang sudah tidak ada."""
-    folder = AKAR / "data" / "laporan"
-    try:
-        berkas = list(folder.glob(".kemajuan-*.json"))
-    except OSError:
-        return
-    for b in berkas:
-        try:
-            pid = int(b.stem.split("-")[-1])
-        except ValueError:
-            continue
-        if pid not in hidup:
-            try:
-                b.unlink()
-            except OSError:
-                pass
-
-
-def _rangkum_tugas() -> list[dict]:
-    daftar = _baca_tugas()
-    berubah = False
-    for t in daftar:
-        hidup = _hidup(t["pid"])
-        if t.get("status") == "berjalan" and not hidup:
-            # Prosesnya hilang BUKAN berarti pekerjaannya beres — lihat
-            # _status_akhir(). Batch yang mati di tengah harus terlihat gagal.
-            t["status"], alasan = _status_akhir(Path(t["log"]))
-            if alasan:
-                t["alasan"] = alasan
-            t["sampai"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            berubah = True
-        t["berjalan"] = hidup
-        t.update(_kemajuan(Path(t["log"])))
-    if berubah:
-        _tulis_tugas(daftar)
-    return list(reversed(daftar))
-
 
 # ------------------------------------------------------------------ rute
 
@@ -675,7 +486,10 @@ def _rangkum_tugas() -> list[dict]:
 def pratinjau(s: Saringan):
     _periksa(s)
     _periksa_sumber(s)
-    return _hitung(s)
+    # Arahnya diputar di sini juga, supaya daftar "Lihat dulu" sama dengan
+    # partai yang benar-benar dikerjakan kalau Mulai ditekan.
+    s, catatan = _hindari_kembar(s, batch_berjalan())
+    return {**_hitung(s), "catatan": catatan}
 
 
 @router.post("/mulai", summary="Jalankan batch analisis di latar belakang")
@@ -684,6 +498,82 @@ def mulai(s: Saringan):
     _periksa(s)
     _periksa_sumber(s)
     return luncurkan(s)
+
+
+# Proses anak yang pernah diluncurkan dari sini. Batch memang sengaja LEPAS
+# (boleh hidup walau server dimatikan), tapi objek Popen-nya tetap disimpan
+# sebentar: kalau dibuang begitu saja, Python meneriakkan
+# "ResourceWarning: subprocess ... is still running" setiap kali objeknya
+# dikumpulkan sampah — muncul di keluaran tes dan menutupi kegagalan
+# sungguhan (audit 21 Sep 2026). poll() di sini juga memanen anak yang sudah
+# mati supaya tidak jadi proses zombi di Linux.
+_anak: list = []
+
+
+def _ingat_anak(proses) -> None:
+    _panen_anak()
+    _anak.append(proses)
+
+
+def _panen_anak() -> int:
+    """Buang catatan anak yang sudah mati; kembalikan jumlah yang masih hidup."""
+    _anak[:] = [p for p in _anak if p.poll() is None]
+    return len(_anak)
+
+
+# Batas batch pernah bocor: 25 Sep 2026 EMPAT batch jalan padahal MAKS_BATCH=2,
+# dan keempatnya mengerjakan partai yang sama (#245850-245853). Sebabnya dua,
+# keduanya balapan:
+#   1. Pemeriksaan slot memakai pindaian daftar proses, dan proses yang baru
+#      saja dianakkan belum tentu muncul di sana (pindaian lewat PowerShell,
+#      ratusan milidetik). Dua permintaan yang berdekatan sama-sama melihat
+#      "slot kosong".
+#   2. Antara periksa dan catat tugas tidak ada penguncian, dan peluncur bukan
+#      cuma satu proses: server (dua tab sekalipun) DAN jaga_antrean.py.
+# Perbaikannya: hitung dari gabungan pindaian + catatan tugas, lalu kurung
+# seluruh periksa-luncurkan-catat dengan kunci berkas lintas proses.
+PATH_KUNCI_LUNCUR = FOLDER_DATA / ".peluncuran.lock"
+TUNGGU_KUNCI_LUNCUR = 20.0
+
+
+def batch_berjalan() -> list[dict]:
+    """
+    Batch yang sedang berjalan menurut DUA sumber sekaligus.
+
+    Pindaian proses saja terlambat mengenali batch yang baru dianakkan;
+    catatan tugas saja bisa basi kalau prosesnya mati mendadak. Gabungannya:
+    pindaian, ditambah catatan berstatus `berjalan` yang PID-nya masih ada.
+    """
+    hasil = {b["pid"]: b for b in _pindai_batch()}
+    for t in _baca_tugas():
+        pid = t.get("pid")
+        if t.get("status") == "berjalan" and pid and pid not in hasil and _proses_ada(pid):
+            hasil[pid] = {"pid": pid, "perintah": t.get("perintah", "")}
+    return list(hasil.values())
+
+
+@contextmanager
+def _kunci_peluncuran():
+    """Satu peluncuran pada satu waktu, lintas proses (server + penjaga)."""
+    from .kunci_penulis import KunciPenulis, KunciTerpakai   # noqa: PLC0415
+    batas = time.monotonic() + TUNGGU_KUNCI_LUNCUR
+    while True:
+        k = KunciPenulis("meluncurkan batch analisis", path=PATH_KUNCI_LUNCUR,
+                         path_info=PATH_KUNCI_LUNCUR.with_suffix(".info"))
+        try:
+            k.ambil()
+        except KunciTerpakai:
+            if time.monotonic() >= batas:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Peluncuran batch lain sedang diproses. Coba lagi sebentar.")
+            time.sleep(0.2)
+            continue
+        try:
+            yield
+        finally:
+            k.lepas()
+        return
 
 
 def luncurkan(s: Saringan) -> dict:
@@ -698,8 +588,101 @@ def luncurkan(s: Saringan) -> dict:
     if jeda_mesin.sedang_jeda():
         raise HTTPException(status_code=409,
                             detail="Mesin sedang dijeda. Tekan Lanjutkan dulu kalau mau menjalankan batch.")
+    with _kunci_peluncuran():
+        return _luncurkan_terkunci(s)
+
+
+def _bentrok(s: Saringan, lain: list[tuple], conn, m) -> list[tuple[dict, int]]:
+    """
+    Batch berjalan yang akan mengerjakan partai yang sama dengan saringan ini:
+    arahnya sama (terbaru/terlama) dan partai pilihannya beririsan. Batch
+    dari arah berlawanan tidak dihitung — keduanya bertemu di tengah dan
+    jalankan() melewati partai yang sudah dianalisis di tempat lain.
+    """
+    ids = {p["id"] for p in m.pilih_partai(conn, _ruang_nama(s))}
+    teks = " ".join(_perintah(s))
+    hasil = []
+    for b, args, ids_b in lain:
+        if args is None:
+            # Perintah tak terbaca: jatuh ke pembanding lama, teks yang sama persis.
+            if (b.get("perintah") or "").endswith(teks):
+                hasil.append((b, len(ids)))
+        elif bool(getattr(args, "terlama", False)) == s.terlama and ids & ids_b:
+            hasil.append((b, len(ids & ids_b)))
+    return hasil
+
+
+def _hindari_kembar(s: Saringan, berjalan: list[dict]) -> tuple[Saringan, str | None]:
+    """
+    Dua batch yang memilih partai yang sama = kerja percuma. 25 Sep 2026 empat
+    batch `--terbaru 2000 --profil cepat` berjalan bersamaan dan keempatnya
+    menganalisis #245850-245853.
+
+    Dulu kembaran ditolak dengan saran "--bagian 0/2 dan 1/2", yang tidak ada
+    di halaman Mesin (Ray, 27 Sep 2026: "saya ingin membantu lebih cepat tapi
+    malah error"). Sekarang batch baru diputar ke ujung lain (terlama dulu
+    kalau yang jalan terbaru dulu, dan sebaliknya); baru ditolak kalau kedua
+    ujung sudah dikerjakan.
+
+    Yang dibandingkan PARTAINYA, bukan teks perintah: `--sumber gm --terbaru
+    2000` lolos di samping `--terbaru 2000` padahal isinya sama (partai Ray
+    yang belum dianalisis = 0), dan keduanya mengerjakan partai yang sama.
+    """
+    if not berjalan:
+        return s, None
+    m = _modul()
+    conn = _buka()
+    try:
+        lain = []
+        for b in berjalan:
+            args = m.argumen_dari_perintah(b.get("perintah") or "")
+            ids_b = {p["id"] for p in m.pilih_partai(conn, args)} if args else None
+            lain.append((b, args, ids_b))
+        kena = _bentrok(s, lain, conn, m)
+        if not kena:
+            return s, None
+        balik = s.model_copy(update={"terlama": not s.terlama})
+        kena_balik = _bentrok(balik, lain, conn, m)
+    finally:
+        conn.close()
+    if kena_balik:
+        raise HTTPException(
+            status_code=409,
+            detail="Partai pilihan ini sudah dikerjakan dari dua arah sekaligus (PID "
+                   + ", ".join(str(b["pid"]) for b, _ in kena + kena_balik)
+                   + ": satu dari partai terbaru, satu dari terlama). Batch ketiga "
+                   "hanya akan mengulang partai yang sama; tunggu salah satu selesai.")
+    pid = ", ".join(f"{b['pid']} ({n} partai sama)" for b, n in kena)
+    arah = "terlama" if balik.terlama else "terbaru"
+    return balik, (f"Batch PID {pid} sedang mengerjakan partai yang sama, jadi batch ini "
+                   f"mengerjakan dari partai {arah} supaya tidak mengulang.")
+
+
+def buka_log_baru():
+    """
+    (path, berkas terbuka) untuk log batch baru, dijamin tidak dipakai batch lain.
+
+    Namanya berstempel detik; dua batch yang mulai di detik yang sama dulu
+    menulis ke SATU berkas (25 Sep 07:41, PID 13068 penjaga + 26548 server):
+    open("w") kedua mengosongkan yang pertama dan kemajuannya tercampur, jadi
+    batch yang dihentikan setelah 5 menit tampak 2000/2000. Mode "x" (buat
+    eksklusif) dijamin sistem operasi, juga antara server dan penjaga.
+    """
+    cap = datetime.now().strftime("%Y%m%d-%H%M%S")
+    FOLDER_LOG.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 100):
+        path = FOLDER_LOG / (f"log-analisa-web-{cap}.txt" if n == 1
+                             else f"log-analisa-web-{cap}-{n}.txt")
+        try:
+            return path, path.open("x", encoding="utf-8")
+        except FileExistsError:
+            continue
+    raise HTTPException(status_code=500, detail="Tidak bisa membuat berkas log baru.")
+
+
+def _luncurkan_terkunci(s: Saringan) -> dict:
     _pindai["waktu"] = 0.0                   # jangan pakai hasil pindaian lama
-    berjalan = _pindai_batch()
+    berjalan = batch_berjalan()
     if len(berjalan) >= MAKS_BATCH:
         raise HTTPException(
             status_code=409,
@@ -708,16 +691,17 @@ def luncurkan(s: Saringan) -> dict:
                    f"{MAKS_BATCH} sekaligus. Tunggu satu selesai, atau hentikan dari "
                    "daftar di bawah.")
 
+    s, catatan = _hindari_kembar(s, berjalan)
+
     ringkas = _hitung(s)
+    ringkas["catatan"] = catatan
     if ringkas["jumlah"] == 0:
         raise HTTPException(status_code=422,
                             detail="Tidak ada partai yang cocok (mungkin semuanya sudah "
                                    "dianalisis). Longgarkan saringannya, atau centang "
                                    "'analisis ulang'.")
 
-    cap = datetime.now().strftime("%Y%m%d-%H%M%S")
-    FOLDER_LOG.mkdir(parents=True, exist_ok=True)
-    path_log = FOLDER_LOG / f"log-analisa-web-{cap}.txt"
+    path_log, log = buka_log_baru()
 
     # -u: keluaran tidak ditahan buffer, jadi kemajuannya bisa dibaca hidup-hidup.
     perintah = [sys.executable, "-X", "utf8", "-u"] + _perintah(s)
@@ -746,7 +730,6 @@ def luncurkan(s: Saringan) -> dict:
         # bendera prioritas sendiri (lihat src/catur_analysis/engine.py).
         bendera = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
                    | subprocess.IDLE_PRIORITY_CLASS)
-    log = path_log.open("w", encoding="utf-8")
     try:
         proses = subprocess.Popen(
             perintah, cwd=str(AKAR), stdout=log, stderr=subprocess.STDOUT,
@@ -757,6 +740,7 @@ def luncurkan(s: Saringan) -> dict:
         raise HTTPException(status_code=500, detail=f"Gagal menjalankan batch: {e}") from e
     finally:
         log.close()
+    _ingat_anak(proses)
 
     # Kurung di inti yang diizinkan SEBELUM batch sempat menyalakan Stockfish;
     # Stockfish mewarisi affinity induknya. Penjaga menerapkannya ulang tiap
@@ -777,9 +761,10 @@ def luncurkan(s: Saringan) -> dict:
         # dilanjutkan tanpa Ray menyusun ulang isian formulirnya.
         "saringan": s.model_dump(),
     }
-    _tulis_tugas(_baca_tugas() + [tugas])
+    with ubah_tugas() as daftar:
+        daftar.append(tugas)
     _pindai["waktu"] = 0.0
-    return {"tugas": tugas, "pratinjau": ringkas}
+    return {"tugas": tugas, "pratinjau": ringkas, "catatan": catatan}
 
 
 @router.get("/status", summary="Statistik analisis + tugas yang berjalan")
@@ -792,8 +777,10 @@ def status():
     st = angka["statistik"]
 
     tugas = _rangkum_tugas()
-    dikenal = {t["pid"] for t in tugas}
-    semua_berjalan = _pindai_batch()
+    dikenal = {t.get("pid") for t in tugas}
+    # Pindaian saja: yang baru dianakkan belum terlihat, jadi halaman sempat
+    # menulis "slot kosong" sedetik setelah batch dijalankan.
+    semua_berjalan = batch_berjalan()
     bersihkan_kemajuan_yatim({b["pid"] for b in semua_berjalan})
     lain = []
     for b in semua_berjalan:
@@ -906,6 +893,14 @@ def hapus_antrean(id_: int):
     return {"id": id_, "status": "dibuang"}
 
 
+@router.delete("/antrean", summary="Bersihkan riwayat antrean (selesai/gagal/batal)")
+def bersihkan_antrean():
+    """Yang menunggu dan yang sedang jalan TIDAK disentuh; hasil analisis di
+    database juga tidak, karena berkas antrean hanya daftar pekerjaan."""
+    from . import antrean as antre                 # noqa: PLC0415
+    return {"dibuang": antre.bersihkan_riwayat(), "sisa": antre.ringkas()["hitung"]}
+
+
 @router.post("/antrean/jaga", summary="Hidupkan/matikan penjaga antrean")
 def jaga_antrean(jalan: bool = True, maks: int = MAKS_BATCH):
     """
@@ -936,6 +931,7 @@ def jaga_antrean(jalan: bool = True, maks: int = MAKS_BATCH):
                                   start_new_session=(os.name != "nt"), close_fds=True)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Gagal menjalankan penjaga: {e}") from e
+    _ingat_anak(proses)
     _pindai["waktu"] = 0.0
     return {"penjaga_pid": proses.pid, "status": "dijalankan"}
 
@@ -982,15 +978,29 @@ def hentikan(masukan: Penghentian):
         raise HTTPException(status_code=404,
                             detail=f"Tidak ada batch analisis dengan PID {masukan.pid} "
                                    "yang sedang berjalan.")
-    _matikan(masukan.pid)
+    # Batch dari antrean ditandai batal DULU, baru prosesnya dimatikan. Dulu
+    # hanya catatan tugas yang berubah: penjaga melihat prosesnya hilang tanpa
+    # baris penutup, menganggapnya "terputus", lalu menjalankannya lagi sampai
+    # 3 kali (22 Sep 21:05 dihentikan Ray, 21:06 diantrekan ulang).
+    from . import antrean as antre                 # noqa: PLC0415
+    ditandai = [k for k in antre.baca()
+                if k.get("pid") == masukan.pid and k.get("status") == "jalan"]
+    for k in ditandai:
+        antre.perbarui(k["id"], status="batal", sampai=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                       alasan=f"dihentikan dari halaman Mesin (PID {masukan.pid})")
+    try:
+        _matikan(masukan.pid)
+    except Exception:
+        for k in ditandai:                        # masih hidup: kembalikan
+            antre.perbarui(k["id"], status="jalan", alasan=k.get("alasan"))
+        raise
 
     _pindai["waktu"] = 0.0
-    daftar = _baca_tugas()
-    for t in daftar:
-        if t["pid"] == masukan.pid and t.get("status") == "berjalan":
-            t["status"] = "dihentikan"
-            t["sampai"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _tulis_tugas(daftar)
+    with ubah_tugas() as daftar:
+        for t in daftar:
+            if t.get("pid") == masukan.pid and t.get("status") == "berjalan":
+                t["status"] = "dihentikan"
+                t["sampai"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     return {"pid": masukan.pid, "status": "dihentikan",
             "catatan": "Partai yang sudah selesai tetap tersimpan; partai yang sedang "
                        "dihitung akan terpilih lagi di batch berikutnya. Pakai "
@@ -1014,15 +1024,24 @@ def lanjutkan(masukan: Penghentian):
     daftar id dan membuat batch lanjutan mengabaikan partai baru yang masuk.
     """
     for t in _baca_tugas():
-        if t["pid"] != masukan.pid:
+        if t.get("pid") != masukan.pid:
             continue
         tersimpan = t.get("saringan")
-        if not tersimpan:
+        if not tersimpan or not isinstance(tersimpan, dict):
             raise HTTPException(
                 status_code=400,
                 detail="Batch ini dijalankan sebelum saringannya ikut dicatat, jadi "
                        "tidak bisa dilanjutkan otomatis. Susun saringannya lagi di atas.")
-        hasil = mulai(Saringan(**tersimpan))
+        # Saringan lama bisa tidak sah lagi menurut aturan versi sekarang (batas
+        # berubah, berkas disunting tangan): itu 400 dengan alasannya, bukan 500.
+        try:
+            saringan = Saringan(**tersimpan)
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=400,
+                detail="Saringan batch ini tidak sah lagi menurut aturan sekarang, jadi "
+                       f"tidak bisa dilanjutkan otomatis: {e.errors()[0].get('msg', e)}") from e
+        hasil = mulai(saringan)
         hasil["dilanjutkan_dari"] = masukan.pid
         return hasil
     raise HTTPException(status_code=404,

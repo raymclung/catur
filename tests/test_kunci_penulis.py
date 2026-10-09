@@ -1,5 +1,6 @@
 """Uji kunci satu-penulis: penolakan, keterangan pemegang, pelepasan."""
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -138,3 +139,52 @@ class UjiKunci(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(os.name == "nt", "Job Object hanya di Windows")
+class AnakIkutMatiBersamaInduk(unittest.TestCase):
+    """
+    Audit 28 Sep 2026: induk (perbarui.py) yang dimatikan tanpa /T melepas
+    kunci penulis, sementara anaknya (indeks_posisi.py) terus menulis tanpa
+    kunci. jalankan_anak() mengikat anak ke umur induk.
+    """
+
+    INDUK = r"""
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+from app.kunci_penulis import jalankan_anak
+anak = [sys.executable, "-c", "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(120)", sys.argv[2]]
+if sys.argv[3] == "lama":
+    subprocess.run(anak)
+else:
+    jalankan_anak(anak)
+"""
+
+    def _anak_hidup_setelah_induk_dibunuh(self, cara: str) -> bool:
+        import subprocess
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            berkas_pid = Path(tmp) / "anak.pid"
+            induk = subprocess.Popen([sys.executable, "-c", self.INDUK, str(AKAR),
+                                      str(berkas_pid), cara])
+            batas = time.time() + 60
+            while not (berkas_pid.exists() and berkas_pid.read_text()) and time.time() < batas:
+                time.sleep(0.2)
+            pid_anak = int(berkas_pid.read_text())
+            induk.kill()                       # TerminateProcess: tanpa /T, anak tidak ikut
+            induk.wait(timeout=30)
+            time.sleep(2)
+            hidup = str(pid_anak) in subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid_anak}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True).stdout
+            if hidup:                          # bersihkan anak yatim dari percobaan "lama"
+                subprocess.run(["taskkill", "/F", "/PID", str(pid_anak)], capture_output=True)
+                time.sleep(1)
+            return hidup
+
+    def test_subprocess_run_biasa_meninggalkan_anak_yatim(self):
+        """Bukti bug lama: bentuk yang dulu dipakai perbarui.py."""
+        self.assertTrue(self._anak_hidup_setelah_induk_dibunuh("lama"))
+
+    def test_jalankan_anak_ikut_mati(self):
+        self.assertFalse(self._anak_hidup_setelah_induk_dibunuh("baru"))

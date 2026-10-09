@@ -179,6 +179,8 @@ dan perkiraan menitnya, baru ulangi perintah yang sama tanpa `--lihat-saja`.
 ```
 python cadangkan_db.py
 
+python cadangkan_db.py --inti
+
 python perbarui.py
 
 python impor_pgn.py --rapikan

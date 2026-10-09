@@ -164,8 +164,18 @@
   }
 
   function saatJatuh(source, target) {
+    if (PilihPromosi.tunda(permainan, source, target, function (p) { jalankan(source, target, p); })) {
+      return "snapback";
+    }
     var m = permainan.move({ from: source, to: target, promotion: "q" });
     if (m === null) return "snapback";
+    perbaruiFen();
+  }
+
+  /* Langkah yang tertunda menunggu pilihan bidak promosi (PilihPromosi). */
+  function jalankan(dari, ke, promosi) {
+    if (!permainan.move({ from: dari, to: ke, promotion: promosi })) return;
+    papan.position(permainan.fen());
     perbaruiFen();
   }
 
@@ -253,6 +263,11 @@
     if (sq === terpilih) { hapusPilihan(); return; }
 
     if (mode === "main") {
+      var dari = terpilih;
+      if (PilihPromosi.tunda(permainan, dari, sq, function (p) { jalankan(dari, sq, p); })) {
+        hapusPilihan();
+        return;
+      }
       var m = permainan.move({ from: terpilih, to: sq, promotion: "q" });
       if (m) {
         hapusPilihan();

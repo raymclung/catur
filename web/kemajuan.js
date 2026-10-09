@@ -342,7 +342,7 @@
 
   var q = new URLSearchParams(window.location.search);
   ["format", "batas", "kelompok"].forEach(function (k) {
-    if (q.get(k) && el[k].querySelector('option[value="' + q.get(k) + '"]')) el[k].value = q.get(k);
+    if (q.get(k) && el[k].querySelector('option[value="' + CSS.escape(q.get(k)) + '"]')) el[k].value = q.get(k);
   });
 
   AkunPribadi.muat().then(function (akun) {
@@ -358,7 +358,7 @@
     semua.value = "semua";
     semua.textContent = "semua akun (" + akun.length + ")";
     el.akun.appendChild(semua);
-    if (q.get("akun") && el.akun.querySelector('option[value="' + q.get("akun") + '"]')) el.akun.value = q.get("akun");
+    if (q.get("akun") && el.akun.querySelector('option[value="' + CSS.escape(q.get("akun")) + '"]')) el.akun.value = q.get("akun");
     if (!akun.length) throw new Error("Tidak ada akun pribadi di database.");
     muat();
   }).catch(function (e) { galat(e.message); });

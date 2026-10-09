@@ -64,9 +64,19 @@ Dependency baru = tulis alasannya di `ARSITEKTUR.md` dulu.
 - **Frontend tidak pernah menyentuh database.** Hanya lewat `/api/...`.
 - **Modul impor tidak tahu soal HTTP.** Impor bisa jalan dari command line
   tanpa server.
-- **SQL hanya ada di `app/db.py`, `app/repositori.py`, `app/impor.py`,
-  `app/posisi.py`, `app/analisis_db.py`, `app/sumber_impor.py`.** Tidak
-  tersebar ke `main.py` atau skrip.
+- **SQL ada di modul fitur, TIDAK PERNAH di `app/main.py`.** Aturan lama
+  ("SQL hanya di enam modul") sudah dilanggar sejak lama: 21 Sep 2026
+  terhitung 20 modul `app/` dan 8 skrip akar menulis SQL sendiri, termasuk
+  `main.py` — persis yang dilarangnya. Aturan yang dilanggar tiap hari
+  mengajarkan bahwa aturan di berkas ini boleh dilanggar, jadi diganti
+  dengan yang benar-benar dijaga:
+    * `app/main.py` bebas SQL; rute intinya memanggil modul
+      (`repositori.pemain_ada()`, dst). Dijaga `tests/test_arsitektur.py`.
+    * Tiap modul fitur (`ringkasan.py`, `sebab_kalah.py`, `pemain_stat.py`, …)
+      boleh punya kuerinya sendiri — memaksanya lewat satu modul tengah hanya
+      memindahkan kerumitan, bukan menghilangkannya.
+    * Nilai SELALU lewat parameter `?`, tidak pernah disambung ke string.
+      Daftar `IN (...)` boleh dibangun dari jumlah tanda tanya.
 - Skema = `app/db.py`, satu-satunya sumber kebenaran. Jangan menyalin SQL ke
   dokumen; salinan selalu menyimpang. Perubahan skema = naikkan
   `VERSI_SKEMA`, migrasi aditif, tes.
@@ -75,6 +85,7 @@ Dependency baru = tulis alasannya di `ARSITEKTUR.md` dulu.
 
 ```
 python -m unittest discover -s tests -v          # tes (pytest TIDAK terinstall)
+set CATUR_UJI_HEADLESS=1 && python -m unittest tests.test_halaman_headless   # uji halaman di Edge
 python -m app.db --info                          # isi database
 python -m uvicorn app.main:aplikasi --reload     # server, http://127.0.0.1:8000, /docs
 python impor_pgn.py --semua                      # partai pribadi dari data/pgn/
@@ -97,7 +108,13 @@ bagian 4 sudah dipenuhi.
 
 ## 6. Kode
 
-- UTF-8, **LF** (bukan CRLF), 4 spasi. Semua file di repo ini LF.
+- UTF-8, **LF** (bukan CRLF), 4 spasi — untuk berkas KODE dan DOKUMEN;
+  periksa dengan `git ls-files --eol`. Pengecualiannya tidak lagi diingat-ingat
+  sendiri, tapi ditegakkan `.gitattributes` (audit 25 Sep 2026):
+  `*.cmd` **wajib CRLF** (cmd.exe bisa tidak membaca baris terakhir kalau LF),
+  `data/pgn/**` dan `data/laporan/*.txt` `-text` (data sumber dan log: biarkan
+  apa adanya, byte-per-byte), `*.png *.ico *.db` biner. Aturan "semua file LF"
+  yang dulu ditulis di sini SALAH untuk berkas-berkas itu.
 - Docstring menjelaskan *kenapa* dan risiko yang diterima, bukan mengulang
   nama fungsi. Komentar hanya kalau membantu.
 - File kecil, satu tanggung jawab. Kalau menemukan kode buruk, perbaiki,

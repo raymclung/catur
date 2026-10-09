@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from .db import koneksi
 from .impor import impor_teks
 from .kunci_penulis import KunciPenulis, KunciTerpakai
-from .posisi import id_belum_terindeks, indeks_partai
+from .posisi import id_belum_terindeks, indeks_partai, kosongkan_cache
 from .tarik_akun import tarik_semua
 from .sumber_impor import catat, sudah_selesai
 
@@ -94,7 +94,15 @@ def _indeks_yang_baru(conn: sqlite3.Connection) -> int:
             n += 1
         except Exception:
             continue        # satu partai rusak tidak boleh membatalkan sisanya
+        # Commit bertahap: satu transaksi untuk ribuan partai mengunci
+        # database puluhan detik, dan penulis lain (jawaban latihan, posisi
+        # tersimpan) menyerah setelah 5 detik -> 500 (audit 28 Sep 2026).
+        if n % 25 == 0:
+            conn.commit()
     conn.commit()
+    # Dipanggil sesudah tiap impor web yang mengubah data (termasuk hasil
+    # yang diperbarui tanpa partai baru, yang tidak menggeser MAX(id)).
+    kosongkan_cache()
     return n
 
 
@@ -136,8 +144,25 @@ def impor_pgn(masukan: UnggahPgn):
         "duplikat": hasil.duplikat,
         "diperbarui": hasil.diperbarui,
         "dilewati": hasil.dilewati,
+        # Sudah dihitung tapi dulu tidak dikirim: "dilewati: 1" tanpa alasan
+        # tidak membedakan Chess960, langkah ilegal, atau header rusak.
+        "alasan_dilewati": hasil.alasan_dilewati,
+        # Termasuk partai lama yang belum terindeks, bukan hanya unggahan ini.
         "diindeks": terindeks,
     }
+
+
+# Pemain dicari dulu (tabel kecil), baru partainya lewat idx_partai_putih/
+# idx_partai_hitam. Bentuk lama `JOIN pemain p ON p.id IN (g.putih_id,
+# g.hitam_id)` memaksa SQLite memindai SELURUH tabel partai sekali per akun:
+# 27 Sep 2026 terukur 18 detik untuk lima akun, kini 0,03 detik per akun
+# dengan hasil yang sama (McLung_07: 8.605 partai, terakhir 2026.09.17).
+KUERI_JUMLAH_AKUN = """
+    WITH p AS (SELECT id FROM pemain WHERE LOWER(nama) = LOWER(?))
+    SELECT COUNT(*) AS jumlah, MAX(tanggal) AS terakhir
+    FROM partai
+    WHERE putih_id IN (SELECT id FROM p) OR hitam_id IN (SELECT id FROM p)
+"""
 
 
 @router.get("/akun", summary="Daftar akun sendiri yang bisa ditarik")
@@ -157,12 +182,7 @@ def daftar_akun():
     try:
         keluar = []
         for a in AKUN:
-            baris = conn.execute(
-                """SELECT COUNT(*) AS jumlah, MAX(g.tanggal) AS terakhir
-                   FROM partai g JOIN pemain p
-                     ON p.id IN (g.putih_id, g.hitam_id)
-                   WHERE LOWER(p.nama) = LOWER(?)""",
-                (a.username,)).fetchone()
+            baris = conn.execute(KUERI_JUMLAH_AKUN, (a.username,)).fetchone()
             keluar.append({
                 "akun": a.username,
                 "platform": a.platform,
@@ -324,3 +344,83 @@ def impor_broadcast(masukan: UnggahBroadcast):
     return {"turnamen": turnamen, "ronde": rincian, "diindeks": terindeks,
             "dianalisis_lichess": dari_eval["dianalisis"],
             "evaluasi_tidak_lengkap": dari_eval["dilewati"], **total}
+
+
+# ------------------------------------------------- pembaruan GM terkenal
+#
+# Ray, 15 Sep 2026: "buatkan fitur untuk membaca langsung dari broadcast,
+# jadinya nanti database bisa diupdate setiap minggunya dengan memasukan game
+# baru para gm dengan ketentuan harus terkenal/super gm".
+#
+# Sengaja lewat TOMBOL, bukan jadwal otomatis: Ray tidak mau ada Python yang
+# menyala sendiri di laptopnya (13 Sep 2026). Halaman menunjukkan kapan terakhir
+# diperbarui supaya ketahuan kalau sudah lewat seminggu.
+#
+# Pekerjaannya bisa belasan menit (puluhan turnamen, jeda 1,5 detik per
+# permintaan ke Lichess), jadi dijalankan sebagai proses lepas seperti batch
+# analisis, dan halaman membaca log-nya.
+
+ARGUMEN_MINGGUAN = ["--resmi", "--tier", "4", "--hari", "10", "--min-elo-bintang", "2400"]
+
+
+def _berkas_mingguan():
+    from pathlib import Path
+    akar = Path(__file__).resolve().parents[1]
+    return (akar, akar / "data" / "laporan" / "log-broadcast-mingguan.txt",
+            akar / "data" / "proses-broadcast-mingguan.json")
+
+
+@router.get("/mingguan", summary="Status pembaruan partai GM terkenal dari broadcast Lichess")
+def status_mingguan():
+    import json
+    from datetime import datetime
+    from .analisa_web import _proses_ada
+    akar, log, proses = _berkas_mingguan()
+    try:
+        p = json.loads(proses.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        p = {}
+    jalan = bool(p.get("pid")) and _proses_ada(int(p["pid"]))
+    try:
+        terakhir = json.loads((akar / "data" / "pembaruan-broadcast.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        terakhir = None
+    hari_lalu = None
+    if terakhir and terakhir.get("selesai"):
+        try:
+            hari_lalu = (datetime.now() - datetime.strptime(terakhir["selesai"], "%Y-%m-%d %H:%M")).days
+        except ValueError:
+            pass
+    ekor = []
+    if log.is_file():
+        ekor = [b for b in log.read_text(encoding="utf-8", errors="replace").splitlines() if b.strip()][-12:]
+    return {"jalan": jalan, "mulai": p.get("mulai") if jalan else None, "terakhir": terakhir,
+            "hari_lalu": hari_lalu, "ekor_log": ekor,
+            "aturan": "salah satu pemain Elo >= 2500 atau bergelar GM; turnamen resmi Lichess "
+                      "tier 4-5 yang berlangsung dalam 10 hari terakhir"}
+
+
+@router.post("/mingguan", summary="Jalankan pembaruan partai GM terkenal sekarang")
+def mulai_mingguan():
+    import json
+    import os
+    import subprocess
+    import sys
+    from datetime import datetime
+    from .kunci_penulis import status as status_kunci
+    if status_mingguan()["jalan"]:
+        raise HTTPException(status_code=409, detail="Pembaruan sedang berjalan.")
+    bebas, pemegang = status_kunci()
+    if not bebas:
+        raise HTTPException(status_code=409, detail=f"Database sedang dipakai penulis lain: {pemegang}")
+    akar, log, proses = _berkas_mingguan()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    bendera = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+               | subprocess.BELOW_NORMAL_PRIORITY_CLASS) if os.name == "nt" else 0
+    with log.open("w", encoding="utf-8") as fh:
+        p = subprocess.Popen([sys.executable, "-X", "utf8", "-u", "impor_broadcast.py", *ARGUMEN_MINGGUAN],
+                             cwd=str(akar), stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             creationflags=bendera, close_fds=True)
+    proses.write_text(json.dumps({"pid": p.pid, "mulai": datetime.now().strftime("%Y-%m-%d %H:%M")}),
+                      encoding="utf-8", newline="\n")
+    return {"jalan": True, "pid": p.pid}

@@ -10,3 +10,21 @@
 
 # PGN sengaja tidak diatur: berkas dari Lichess/Chess.com memang CRLF,
 # dan isinya data sumber yang tidak boleh diubah.
+
+# Pengecualian (audit 25 Sep 2026). Aturan "semua teks LF" benar untuk KODE,
+# tapi dipaksakan ke berkas di bawah ini justru merusak atau sia-sia.
+
+# Skrip .cmd dijalankan cmd.exe: baris berakhiran LF saja bisa membuat baris
+# perintah terakhir tidak terbaca. Windows-only berkasnya, jadi CRLF memang benar.
+*.cmd text eol=crlf
+
+# Data sumber dari Lichess/Chess.com dan log batch: isinya bukti, bukan kode.
+# `-text` = git tidak menyentuh akhir barisnya sama sekali, jadi berkas yang
+# diunduh tetap byte-per-byte sama dengan aslinya.
+data/pgn/** -text
+data/laporan/*.txt -text
+
+# Biner: jangan pernah diubah, dan jangan dibandingkan sebagai teks.
+*.png binary
+*.ico binary
+*.db  binary

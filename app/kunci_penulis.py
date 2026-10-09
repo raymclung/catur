@@ -31,9 +31,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from .db import FOLDER_DATA
+
 AKAR = Path(__file__).resolve().parents[1]
-PATH_KUNCI = AKAR / "data" / ".penulis.lock"
-PATH_INFO = AKAR / "data" / ".penulis.info"
+PATH_KUNCI = FOLDER_DATA / ".penulis.lock"
+PATH_INFO = FOLDER_DATA / ".penulis.info"
 
 
 class KunciTerpakai(RuntimeError):
@@ -127,6 +129,89 @@ def lingkungan_anak() -> dict:
     Tidak memberi apa-apa kalau proses ini ternyata tidak memegang kunci:
     _diwarisi() mencocokkan PID dengan berkas keterangan pemegang."""
     return {**os.environ, ENV_PEMEGANG: str(os.getpid())}
+
+
+# Job Object Windows milik proses ini: anak yang mewarisi kunci dimasukkan ke
+# sini dan ikut mati saat proses ini mati. Handle-nya sengaja tidak pernah
+# ditutup — Windows menutupnya ketika proses ini berakhir, dengan cara apa pun.
+_job_anak = None
+
+
+def _job_matikan_saat_tutup():
+    """Job dengan JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, dibuat sekali."""
+    global _job_anak
+    if _job_anak is not None:
+        return _job_anak
+    import ctypes
+    from ctypes import wintypes
+
+    class Dasar(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class Io(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class Luas(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", Dasar), ("IoInfo", Io),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = Luas()
+    info.BasicLimitInformation.LimitFlags = 0x2000     # KILL_ON_JOB_CLOSE
+    if not k32.SetInformationJobObject(wintypes.HANDLE(job), 9,  # ExtendedLimitInformation
+                                       ctypes.byref(info), ctypes.sizeof(info)):
+        return None
+    _job_anak = job
+    return job
+
+
+def jalankan_anak(perintah: list[str], **kwargs):
+    """
+    `subprocess.run` untuk anak yang MEWARISI kunci proses ini (lihat
+    lingkungan_anak): anaknya diikat ke umur proses ini.
+
+    Tanpa ikatan ini, induk yang dimatikan dengan `taskkill /PID` tanpa `/T`
+    melepas kuncinya (OS menutup berkas kunci) sementara anaknya — mis.
+    indeks_posisi.py dari perbarui.py — terus menulis, dan penulis besar lain
+    lolos mengambil kunci (audit 28 Sep 2026). Di Windows anak dimasukkan ke
+    Job Object ber-KILL_ON_JOB_CLOSE; di sistem lain perilakunya tetap
+    subprocess.run biasa.
+    """
+    import subprocess
+
+    kwargs.setdefault("env", lingkungan_anak())
+    masukan = kwargs.pop("input", None)
+    timeout = kwargs.pop("timeout", None)
+    with subprocess.Popen(perintah, **kwargs) as proses:
+        if os.name == "nt":
+            import ctypes
+            job = _job_matikan_saat_tutup()
+            if job is not None:
+                ctypes.windll.kernel32.AssignProcessToJobObject(
+                    ctypes.c_void_p(job), ctypes.c_void_p(int(proses._handle)))
+        try:
+            keluar, galat = proses.communicate(masukan, timeout=timeout)
+        except BaseException:
+            proses.kill()
+            raise
+        return subprocess.CompletedProcess(perintah, proses.returncode, keluar, galat)
 
 
 def _diwarisi(path_info: Path) -> bool:

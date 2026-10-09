@@ -18,10 +18,14 @@ Alurnya:
        akurasi, klasifikasi, dan langkah terbaik dihitung dengan rumus yang
        sama persis; browser hanya menggantikan engine-nya.
 
-Pengamanan: server yang dibuka ke WiFi memperlihatkan seluruh API. Karena itu
-middleware `hanya_pembantu_dari_luar` (dipasang di main.py) menolak semua
-alamat selain JALUR_LUAR untuk perangkat lain, dan jalur itu pun wajib kode.
-Laptop sendiri (127.0.0.1) tetap bisa membuka semuanya.
+Pengamanan dua lapis (lihat `mode_pembantu_saja()`):
+  * Server yang dibuka ke internet dijalankan dengan `CATUR_MODE=pembantu`
+    (`jalankan-pembantu.cmd`, port 8001). Dalam mode itu HANYA JALUR_LUAR yang
+    dilayani, siapa pun pemanggilnya — tidak bergantung pada header apa pun.
+  * Server biasa (port 8000, mode penuh) tetap menolak jalur di luar
+    JALUR_LUAR untuk alamat non-lokal atau permintaan berheader proxy.
+Kedua-duanya wajib kode untuk API pembantu; `/api/pembantu/info` dan `/kode`
+sengaja TIDAK ada di JALUR_LUAR, jadi kode tidak pernah bisa dibaca dari luar.
 
 Urutan partai: partai GM dulu, lalu partai akun sendiri (Ray, 13 Sep sore:
 "utamakan yang partai gm dulu"); di dalam tiap kelompok dari yang TERLAMA.
@@ -43,6 +47,7 @@ import socket
 import sqlite3
 import sys
 import threading
+from collections import deque
 import time
 from pathlib import Path
 
@@ -63,7 +68,7 @@ from catur_analysis.partai import SKOR_MAT, analisis_partai   # noqa: E402
 from .analisa_web import SUMBER_SAYA                       # noqa: E402
 from .analisis_db import simpan_laporan                    # noqa: E402
 from .batas_cpu import PATH_PENGATURAN                     # noqa: E402
-from .db import koneksi                                    # noqa: E402
+from .db import FOLDER_DATA, koneksi                       # noqa: E402
 
 FOLDER_ENGINE = AKAR / "engine" / "browser"
 BERKAS_ENGINE = ("stockfish-18-lite-single.js", "stockfish-18-lite-single.wasm")
@@ -91,12 +96,42 @@ JALUR_LUAR = ("/pembantu", "/static/pembantu.html", "/static/pembantu.js",
               "/pembantu/engine/")
 ALAMAT_LOKAL = {"127.0.0.1", "::1", "localhost", "testclient"}
 
+# Mode server. Audit 21 Sep 2026: penjagaan lama FAIL-OPEN — permintaan
+# dianggap tepercaya KECUALI membawa salah satu header proxy. Artinya
+# keamanannya bergantung pada tunnel yang rajin menambahkan header; tunnel yang
+# tidak mengirim satu pun dari keempatnya akan membuka seluruh API (impor,
+# hentikan batch, ganti kode) ke internet tanpa tanda apa pun.
+#
+# Sekarang dibalik: server yang ditunnel dijalankan dengan
+# CATUR_MODE=pembantu, dan dalam mode itu HANYA jalur pembantu yang dilayani —
+# tidak peduli permintaannya datang dari mana atau membawa header apa.
+# Bawaannya "penuh" (untuk 127.0.0.1 di laptop sendiri), dan pemeriksaan lama
+# tetap jalan sebagai lapis kedua.
+ENV_MODE = "CATUR_MODE"
+
+
+def mode_pembantu_saja() -> bool:
+    """Server ini sedang dijalankan khusus untuk pembantu (dibuka lewat tunnel)?"""
+    import os
+    return os.environ.get(ENV_MODE, "penuh").strip().lower() in ("pembantu", "pembantu-saja")
+
+
 router = APIRouter()
 
 _kunci = threading.Lock()
 _sewa: dict[int, dict] = {}          # partai_id -> {"nama", "sampai"}
 _perangkat: dict[str, dict] = {}     # nama -> {"terakhir", "selesai", "posisi", "detik", "partai_id"}
 _ditolak: set[int] = set()           # kirimannya tidak cocok: jangan dibagikan lagi sampai server dinyalakan ulang
+
+# Antrean partai yang disiapkan sekaligus. 17 Sep 2026: dengan 25 tab pembantu,
+# satu permintaan "ambil" makan 9-48 detik, padahal kuerinya sendiri 0,3 detik
+# -- semua tab mengantre di _kunci sementara tiap permintaan mencari ulang di
+# database yang sebagian besar sudah dianalisis. Throughput turun dari +-300
+# ke +-32 partai per menit. Sekarang ISI_ANTREAN id diambil sekali, lalu
+# dibagikan dari memori; tiap id diperiksa ulang (satu kueri titik) sebelum
+# diserahkan, karena batch laptop bisa sudah mengerjakannya.
+ISI_ANTREAN = 400
+_antrean: deque[tuple[int, int]] = deque()   # (partai_id, depth)
 
 
 # ------------------------------------------------------------------ kode
@@ -142,13 +177,22 @@ HEADER_PROXY = ("cf-connecting-ip", "x-forwarded-for", "x-real-ip", "forwarded")
 
 
 def asal_permintaan(request: Request) -> str:
-    """Alamat pengirim sebenarnya, termasuk kalau datang lewat tunnel/proxy."""
-    for h in ("cf-connecting-ip", "x-real-ip"):
-        if request.headers.get(h):
-            return request.headers[h].strip()
-    if request.headers.get("x-forwarded-for"):
-        return request.headers["x-forwarded-for"].split(",")[0].strip()
-    return request.client.host if request.client else "?"
+    """
+    Alamat pengirim sebenarnya, untuk batas tebakan kode.
+
+    Header proxy hanya dipercaya kalau koneksinya datang dari laptop sendiri
+    (proses cloudflared); perangkat di WiFi yang mengirim header itu sendiri
+    tetap dicatat dengan alamat aslinya. Dari header, hanya CF-Connecting-IP
+    yang dipakai: Cloudflare selalu MENIMPANYA dengan IP pengirim, sedangkan
+    X-Forwarded-For (elemen pertama) dan X-Real-IP diteruskan apa adanya dari
+    pengirim. Audit 27 Sep 2026: dengan X-Forwarded-For acak di tiap tebakan,
+    batas per alamat tidak pernah tercapai, dan 100 tebakan palsu mengunci
+    SEMUA pembantu selama 10 menit.
+    """
+    langsung = request.client.host if request.client else "?"
+    if langsung in ALAMAT_LOKAL and request.headers.get("cf-connecting-ip"):
+        return request.headers["cf-connecting-ip"].strip()
+    return langsung
 
 
 def _periksa_kode(kode: str, asal: str = "?") -> None:
@@ -172,14 +216,25 @@ def _periksa_kode(kode: str, asal: str = "?") -> None:
 
 def boleh_dari_luar(host: str | None, jalur: str, lewat_proxy: bool = False) -> bool:
     """
-    False kalau permintaan dari perangkat lain menuju jalur di luar JALUR_LUAR.
+    False kalau permintaan ini tidak boleh dilayani.
 
-    `lewat_proxy`: permintaan membawa header proxy/tunnel. Tunnel (mis.
-    Cloudflare) meneruskan permintaan internet dari 127.0.0.1, jadi tanpa
-    pemeriksaan ini seluruh API akan terbuka ke internet.
+    Dua lapis, yang pertama tidak bergantung pada apa pun yang dikirim pemanggil:
+
+    1. **Mode pembantu** (CATUR_MODE=pembantu, dipakai server yang ditunnel):
+       hanya JALUR_LUAR yang dilayani, siapa pun pemanggilnya. Ini yang
+       menutup lubang fail-open: tunnel tanpa header proxy pun tidak bisa
+       menembus, karena servernya memang tidak melayani jalur lain.
+    2. **Mode penuh** (bawaan, untuk laptop sendiri): permintaan dari luar —
+       alamat bukan lokal, ATAU membawa header proxy — dibatasi ke JALUR_LUAR.
     """
+    if mode_pembantu_saja():
+        return _jalur_pembantu(jalur)
     if not lewat_proxy and (host is None or host in ALAMAT_LOKAL):
         return True
+    return _jalur_pembantu(jalur)
+
+
+def _jalur_pembantu(jalur: str) -> bool:
     return any(jalur == j or (j.endswith("/") and jalur.startswith(j)) for j in JALUR_LUAR)
 
 
@@ -223,8 +278,18 @@ def _bersihkan_sewa(sekarang: float) -> None:
 
 def pilih_partai(conn: sqlite3.Connection, dikecualikan: list[int],
                  dukung960: bool = True) -> tuple[sqlite3.Row, int] | None:
+    """(partai, depth) berikutnya -- satu saja; lihat pilih_banyak()."""
+    daftar = pilih_banyak(conn, dikecualikan, dukung960, 1)
+    if not daftar:
+        return None
+    pid, depth = daftar[0]
+    return conn.execute("SELECT id, pgn FROM partai WHERE id = ?", (pid,)).fetchone(), depth
+
+
+def pilih_banyak(conn: sqlite3.Connection, dikecualikan: list[int],
+                 dukung960: bool = True, batas: int = ISI_ANTREAN) -> list[tuple[int, int]]:
     """
-    (partai, depth) berikutnya untuk pembantu.
+    Sampai `batas` (partai_id, depth) berikutnya untuk pembantu.
 
     Tahap 1, depth 10: partai GM yang belum dianalisis, lalu partai akun
     sendiri — masing-masing terlama dulu.
@@ -239,29 +304,80 @@ def pilih_partai(conn: sqlite3.Connection, dikecualikan: list[int],
     if not dukung960:
         # tab yang dibuka sebelum perbaikan Chess960 tidak bisa menghitungnya dengan benar
         kecuali += " AND g.pgn NOT LIKE '%[Variant \"Chess960\"]%'"
-    dasar = ("SELECT g.id, g.pgn FROM partai g WHERE g.jumlah_langkah >= 10"
+    dasar = ("SELECT g.id FROM partai g WHERE g.jumlah_langkah >= 10"
              " AND NOT EXISTS (SELECT 1 FROM analisis a WHERE a.partai_id = g.id)" + kecuali)
+    hasil: list[tuple[int, int]] = []
     for syarat, urut in ((f" AND g.sumber NOT IN ({tanda})", " ORDER BY g.id ASC"),
                          (f" AND g.sumber IN ({tanda})", " ORDER BY g.id ASC")):
-        r = conn.execute(dasar + syarat + urut + " LIMIT 1",
-                         list(dikecualikan) + list(SUMBER_SAYA)).fetchone()
-        if r is not None:
-            return r, DEPTH
+        sisa = batas - len(hasil)
+        if sisa <= 0:
+            break
+        hasil += [(r[0], DEPTH) for r in conn.execute(
+            dasar + syarat + urut + f" LIMIT {int(sisa)}", list(dikecualikan) + list(SUMBER_SAYA))]
+    if hasil:
+        return hasil
 
-    kasar = (f"SELECT g.id, g.pgn FROM analisis a JOIN partai g ON g.id = a.partai_id"
+    kasar = (f"SELECT g.id FROM analisis a JOIN partai g ON g.id = a.partai_id"
              f" WHERE (a.profil = ? OR a.engine IN ({','.join('?' * len(ENGINE_KASAR))}))" + kecuali)
     for syarat in (f" AND g.sumber IN ({tanda})", f" AND g.sumber NOT IN ({tanda})"):
-        r = conn.execute(kasar + syarat + " ORDER BY g.id DESC LIMIT 1",
-                         [CEPAT.nama, *ENGINE_KASAR, *dikecualikan, *SUMBER_SAYA]).fetchone()
-        if r is not None:
-            return r, DEPTH_MENDALAM
-    return None
+        sisa = batas - len(hasil)
+        if sisa <= 0:
+            break
+        hasil += [(r[0], DEPTH_MENDALAM) for r in conn.execute(
+            kasar + syarat + f" ORDER BY g.id DESC LIMIT {int(sisa)}",
+            [CEPAT.nama, *ENGINE_KASAR, *dikecualikan, *SUMBER_SAYA])]
+    return hasil
+
+
+def _masih_perlu(conn: sqlite3.Connection, pid: int, depth: int) -> sqlite3.Row | None:
+    """PGN partai kalau partai itu masih perlu dikerjakan dengan depth ini, selain itu None."""
+    r = conn.execute(
+        "SELECT g.pgn, a.profil, a.engine FROM partai g LEFT JOIN analisis a ON a.partai_id = g.id"
+        " WHERE g.id = ?", (pid,)).fetchone()
+    if r is None:
+        return None
+    if depth == DEPTH:
+        return r if r["profil"] is None else None
+    return r if (r["profil"] == CEPAT.nama or r["engine"] in ENGINE_KASAR) else None
+
+
+# Server pembantu (mode pembantu, port 8001) adalah PROSES LAIN dari server
+# utama, jadi kartu "Pembantu" di halaman Mesin tidak bisa melihat isi
+# memorinya. Statusnya dititipkan lewat berkas ini — bukan lewat jalur HTTP
+# baru, karena `/api/pembantu/info` memuat kode dan sengaja tidak pernah
+# dilayani ke luar.
+PATH_STATUS = FOLDER_DATA / "pembantu-status.json"
+JEDA_TULIS_STATUS = 5.0
+_status_ditulis = [0.0]
+
+
+def _tulis_status(paksa: bool = False) -> None:
+    sekarang = time.time()
+    if not paksa and sekarang - _status_ditulis[0] < JEDA_TULIS_STATUS:
+        return
+    _status_ditulis[0] = sekarang
+    try:
+        PATH_STATUS.parent.mkdir(parents=True, exist_ok=True)
+        PATH_STATUS.write_text(json.dumps({"waktu": sekarang, "perangkat": _perangkat}),
+                               encoding="utf-8", newline="\n")
+    except OSError:
+        pass          # status hanya bantuan tampilan, jangan menggagalkan pembantu
+
+
+def _baca_status() -> dict:
+    """Perangkat yang dicatat proses pembantu lain (kalau ada)."""
+    try:
+        isi = json.loads(PATH_STATUS.read_text(encoding="utf-8"))
+        return isi.get("perangkat", {}) if isinstance(isi, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _catat_perangkat(nama: str, **ubah) -> dict:
     d = _perangkat.setdefault(nama, {"terakhir": 0.0, "selesai": 0, "posisi": 0,
                                      "detik": 0.0, "partai_id": None})
     d.update(ubah, terakhir=time.time())
+    _tulis_status()
     return d
 
 
@@ -364,22 +480,53 @@ def api_ambil(badan: Ambil, conn: sqlite3.Connection = Depends(db),
               asal: str = Depends(asal_permintaan)):
     _periksa_kode(badan.kode, str(asal))
     with _kunci:
-        sekarang = time.time()
-        _bersihkan_sewa(sekarang)
         # partai lama milik perangkat ini (misalnya halaman dimuat ulang) dilepas dulu
-        for pid in [p for p, s in _sewa.items() if s["nama"] == badan.nama]:
-            del _sewa[pid]
-        pilihan = pilih_partai(conn, list(_sewa) + sorted(_ditolak), badan.dukung960)
-        if pilihan is None:
+        for p_lama in [p for p, s in _sewa.items() if s["nama"] == badan.nama]:
+            _antrean.appendleft((p_lama, _sewa.pop(p_lama).get("depth", DEPTH)))
+    lewati_960: list[tuple[int, int]] = []
+    r = None
+    pid = depth = None
+    for _ in range(50):
+        with _kunci:
+            sekarang = time.time()
+            _bersihkan_sewa(sekarang)
+            berikut = None
+            for coba_isi in range(2):
+                while _antrean:
+                    kandidat = _antrean.popleft()
+                    if kandidat[0] not in _sewa and kandidat[0] not in _ditolak:
+                        berikut = kandidat
+                        break
+                if berikut or coba_isi:
+                    break
+                _antrean.extend(pilih_banyak(conn, list(_sewa) + sorted(_ditolak)))
+            if berikut is None:
+                _antrean.extendleft(reversed(lewati_960))
+                _catat_perangkat(badan.nama, partai_id=None)
+                return {"partai_id": None, "pesan": "Semua partai sudah dianalisis mendalam."}
+            pid, depth = berikut
+            _sewa[pid] = {"nama": badan.nama, "sampai": sekarang + SEWA_DETIK, "depth": depth}
+        r = _masih_perlu(conn, pid, depth)
+        if r is not None and not badan.dukung960 and '[Variant "Chess960"]' in (r["pgn"] or ""):
+            lewati_960.append(berikut)       # tab lama tanpa dukungan 960: biarkan untuk tab lain
+            r = None
+        if r is not None:
+            break
+        with _kunci:
+            _sewa.pop(pid, None)             # sudah dikerjakan di tempat lain, atau dilewati
+    with _kunci:
+        _antrean.extendleft(reversed(lewati_960))
+        if r is None:
             _catat_perangkat(badan.nama, partai_id=None)
-            return {"partai_id": None, "pesan": "Semua partai sudah dianalisis mendalam."}
-        r, depth = pilihan
-        _sewa[r["id"]] = {"nama": badan.nama, "sampai": sekarang + SEWA_DETIK, "depth": depth}
-        _catat_perangkat(badan.nama, partai_id=r["id"])
+    if r is None:
+        # bukan "habis": pembantu.js akan mencoba lagi 15 detik kemudian
+        raise HTTPException(status_code=503, detail="Belum ada partai yang bisa dibagikan, dicoba lagi.")
+    with _kunci:
+        _catat_perangkat(badan.nama, partai_id=pid)
     game = chess.pgn.read_game(io.StringIO(r["pgn"] or ""))
     papan = game.board()
     h = game.headers
-    return {"partai_id": r["id"], "fen_awal": papan.fen(),
+    return {"partai_id": pid, "fen_awal": papan.fen(),
             "langkah": [m.uci() for m in game.mainline_moves()],
             "depth": depth, "mendalam": depth > DEPTH,
             # Chess960 (mis. TWIC "Biel GM2-960"): rokade UCI-nya raja-makan-benteng,
@@ -403,6 +550,17 @@ def api_kirim(badan: Kirim, conn: sqlite3.Connection = Depends(db),
     depth = sewa["depth"] if sewa else badan.depth
     if depth not in PROFIL_PER_DEPTH:
         raise HTTPException(status_code=422, detail=f"Depth {depth} tidak dikenal")
+    # Hanya partai yang memang dipinjamkan ke perangkat ini. Audit 27 Sep 2026:
+    # tanpa pemeriksaan ini, siapa pun yang tahu kodenya bisa menimpa analisis
+    # partai mana saja. Sewa yang sudah kedaluwarsa (tablet lambat, > SEWA_DETIK)
+    # masih diterima, tapi hanya kalau partainya MASIH perlu dianalisis — hasil
+    # yang sudah ada tidak pernah tertimpa. 422, bukan 409: pembantu.js melewati
+    # partai untuk 422 dan mengulang tanpa henti untuk kode lain.
+    if sewa is not None and sewa["nama"] != badan.nama:
+        raise HTTPException(status_code=422, detail="Partai ini sedang dikerjakan perangkat lain.")
+    if sewa is None and _masih_perlu(conn, badan.partai_id, depth) is None:
+        raise HTTPException(status_code=422, detail="Partai ini tidak sedang dipinjamkan ke perangkat "
+                                                    "ini dan analisisnya sudah ada; hasil tidak dipakai.")
     try:
         laporan = susun_laporan(r["pgn"], badan.posisi, depth)
     except ValueError as e:
@@ -432,7 +590,7 @@ def api_lepas(badan: Lepas, asal: str = Depends(asal_permintaan)):
     with _kunci:
         for pid in [p for p, s in _sewa.items()
                     if s["nama"] == badan.nama and badan.partai_id in (None, p)]:
-            del _sewa[pid]
+            _antrean.appendleft((pid, _sewa.pop(pid).get("depth", DEPTH)))   # kembali ke depan antrean
         if badan.nama in _perangkat:
             _perangkat[badan.nama]["partai_id"] = None
     return {"dilepas": True}
@@ -445,11 +603,14 @@ def api_info(request: Request):
     sekarang = time.time()
     with _kunci:
         _bersihkan_sewa(sekarang)
+        # gabung dengan catatan proses pembantu lain (port 8001); yang di
+        # memori sendiri menang kalau namanya sama
+        gabungan = {**_baca_status(), **_perangkat}
         daftar = [{"nama": n, "aktif": sekarang - d["terakhir"] < AKTIF_DETIK,
                    "detik_lalu": round(sekarang - d["terakhir"]),
                    "selesai": d["selesai"], "partai_id": d["partai_id"],
                    "posisi_per_detik": round(d["posisi"] / d["detik"], 2) if d["detik"] else None}
-                  for n, d in sorted(_perangkat.items())]
+                  for n, d in sorted(gabungan.items())]
     return {"kode": baca_kode(), "port": port,
             "alamat": [f"http://{a}:{port}/pembantu" for a in alamat],
             "terbuka": any(terbuka_untuk_wifi(a, port) for a in alamat),

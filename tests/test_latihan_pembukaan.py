@@ -10,7 +10,7 @@ sys.path.insert(0, str(AKAR))
 
 from app.db import buat_skema, koneksi, sekarang
 from app.latihan_pembukaan import (CATALAN, ENGLISH, RAGOZIN, SICILIAN,
-                                   hitung_soal, pembukaan_repertoire)
+                                   hitung_soal, langkah_gm, pembukaan_repertoire)
 from app.posisi import indeks_partai
 
 RAY, GM1, GM2, LAWAN = 1, 2, 3, 4
@@ -65,6 +65,31 @@ class UjiSoal(unittest.TestCase):
     def isi_gm(self, langkah, n, tanggal="2024.01.01"):
         for _ in range(n):
             self.partai(langkah, GM1, GM2, "twic", tanggal=tanggal)
+
+    def test_langkah_gm_posisi_berulang_dihitung_sekali(self):
+        """Audit 27 Sep: posisi awal muncul dua kali di partai ini (kuda maju-
+        mundur), dulu Nf3 terhitung 2 partai padahal hanya satu."""
+        self.partai("1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3", GM1, GM2, "twic", "1/2-1/2")
+        self.conn.commit()
+        awal = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -"
+        nf3 = [l for l in langkah_gm(self.conn, awal, sejak="2000") if l["san"] == "Nf3"]
+        self.assertEqual(nf3[0]["n"], 1)
+
+    def test_jalur_cepat_sama_persis_dengan_jalur_sql(self):
+        """hasil_partai_gm + indeks posisi saja (29 Sep 2026, 11 -> 3,5 detik)
+        harus memberi angka yang sama: jumlah, porsi, skor, urutan, dan
+        saringan sumber/tanggal/mesin."""
+        from app.latihan_pembukaan import hasil_partai_gm
+        self.isi_gm("1. c4 e5 2. Nc3", 5)
+        self.isi_gm("1. c4 c5 2. Nf3", 3, tanggal="1999.01.01")           # sebelum SEJAK
+        self.partai("1. c4 e6", GM1, GM2, "lichess-user", "0-1")         # bukan sumber GM
+        self.partai("1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3", GM1, GM2, "twic", "1/2-1/2")
+        self.partai("1. c4 e5", GM1, GM2, "twic", "1-0")
+        self.partai("1. c4 c5", GM1, GM2, "twic", "0-1")
+        self.conn.commit()
+        peta = hasil_partai_gm(self.conn, "2000")
+        for fen in [r[0] for r in self.conn.execute("SELECT DISTINCT fen_kunci FROM posisi")]:
+            self.assertEqual(langkah_gm(self.conn, fen, "2000", peta), langkah_gm(self.conn, fen, "2000"), fen)
 
     def test_kebiasaan_menyimpang_jadi_soal(self):
         # GM: 1.c4 e5 2.Nc3 Nf6 3.Nf3 (19x) dan 3.g3 (6x); tidak pernah 3.d3

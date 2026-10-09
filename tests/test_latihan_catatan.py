@@ -84,3 +84,46 @@ class UjiCatatan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UjiMasukanAneh(unittest.TestCase):
+    """Audit 28 Sep 2026: tiap kasus di bawah ini dulu 500 atau menyimpan omong kosong."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = koneksi(Path(self.tmp.name) / "uji.db")
+        buat_skema(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def jumlah(self):
+        return self.conn.execute("SELECT COUNT(*) FROM latihan_jawaban").fetchone()[0]
+
+    def test_h_bukan_teks_dilewati_bukan_500(self):
+        self.assertEqual(impor_catatan_lama(self.conn, {"a": {"h": ["b"]}, "b": {"h": {"x": 1}}}), 0)
+
+    def test_tanggal_di_luar_akal_dilewati_yang_sah_tetap_masuk(self):
+        n = impor_catatan_lama(self.conn, {
+            "sah": {"h": "b", "w": "2026-01-01"},
+            "lama": {"h": "b", "w": "1960-01-01"},       # dulu OSError di Windows -> semua batal
+            "nol": {"h": "b", "w": "0001-01-01"},
+            "depan": {"h": "s", "w": "2999-01-01"},      # dulu "menunggu" selamanya
+            "rusak": {"h": "b", "w": "2026-02-30"},      # dulu diganti hari ini diam-diam
+            "teks": "1969-12-31",
+        })
+        self.assertEqual(n, 1)
+        self.assertEqual(self.jumlah(), 1)
+
+    def test_kunci_surrogate_atau_spasi_dilewati(self):
+        self.assertEqual(impor_catatan_lama(self.conn, {"a\udc80": {"h": "b", "w": "2026-01-01"},
+                                                        " ": {"h": "b", "w": "2026-01-01"}}), 0)
+
+    def test_model_jawaban_menolak_kunci_rusak(self):
+        from pydantic import ValidationError
+        from app.latihan_catatan import Jawaban
+        for kunci in ("a\udc80", " "):
+            with self.assertRaises(ValidationError):
+                Jawaban(kunci=kunci, hasil="benar")
+        Jawaban(kunci="12:5", hasil="benar")

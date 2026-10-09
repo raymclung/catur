@@ -14,6 +14,17 @@ python -m uvicorn app.main:aplikasi --reload
 
 Lalu buka **http://127.0.0.1:8000** di browser.
 
+**Untuk pembantu lewat internet:** `jalankan-pembantu.cmd` menyalakan server
+KHUSUS pembantu di port 8001 (`CATUR_MODE=pembantu`) — jalur selain halaman
+pembantu ditolak dari siapa pun, termasuk 127.0.0.1. Tunnel Cloudflare
+diarahkan ke port itu, bukan ke port 8000. Server biasa tidak boleh ditunnel.
+
+**Tanpa terminal:** klik dua kali **`jalankan-server.cmd`** (atau shortcut
+"Catur - Nyalakan Server" di Desktop). Server dinyalakan di latar belakang lalu
+browser dibuka sendiri; kalau servernya sudah menyala, browsernya saja yang
+dibuka. Pasangannya **`matikan-server.cmd`**. Keduanya TIDAK menyala otomatis
+saat Windows hidup - permintaan Ray, 13 Sep 2026.
+
 Alamat itu hanya bisa diakses dari komputer ini sendiri. Dokumentasi API
 otomatis ada di http://127.0.0.1:8000/docs.
 
@@ -169,7 +180,7 @@ Lewat terminal:
 
 ```
 python jaga_antrean.py --lihat      # isi antrean
-python jaga_antrean.py --jaga       # jaga terus (bawaan 2 batch; batas mesin 3)
+python jaga_antrean.py --jaga       # jaga terus (bawaan 2 batch = batas mesin MAKS_BATCH)
 python jaga_antrean.py --sekali     # satu kali periksa
 python jaga_antrean.py --daftarkan  # hidup sendiri tiap masuk Windows
 python jaga_antrean.py --cabut      # batalkan pendaftaran itu
@@ -233,6 +244,22 @@ python impor_broadcast.py --resmi --tier 4         # semua turnamen resmi tier >
 python impor_broadcast.py --resmi --tier 5 --lihat-saja
 ```
 
+**Saringan bintang** (yang menentukan partai broadcast mana yang masuk): satu
+partai disimpan kalau **salah satu** pemainnya Elo >= 2400, atau **salah satu**
+bergelar GM/WGM berapa pun ratingnya — lawannya tidak diperiksa. Partai tanpa
+Elo dan tanpa gelar dibuang, karena kekuatan pemainnya tidak bisa dibuktikan.
+Atur dengan `--min-elo-bintang` dan `--gelar-lolos`; nilai bawaannya ada di
+`impor_broadcast.py` bersama riwayat keputusan Ray dan angka pengukurannya.
+
+Ini memang meloloskan minoritas partai turnamen besar, dan itu benar: diukur
+25 Sep 2026 pada 27 ronde Olimpiade Samarkand (2.364 partai), yang lolos 660
+(28%) — bagian Open 481 dari 1.236 (39%), bagian Women 179 dari 1.128 (16%).
+Ronde papan atas lolos 100% (48 dari 48); bagian bawah 0%, karena sebagian
+besar peserta Olimpiade memang di bawah 2400. Aturan saringan ikut jadi bagian
+kunci di `sumber_impor`, jadi kalau aturannya dilonggarkan, ronde yang dulu
+tersaring otomatis diambil ulang pada pembaruan berikutnya (sebatas rentang
+`--hari`, bawaannya 10 hari terakhir).
+
 Cakupan: **seluruh arsip TWIC yang tersedia** (keputusan Ray 11 Sep 2026),
 bukan 3 tahun. Zip hanya ada dari edisi 920 (Juni 2012) ke atas; edisi 1-919
 tidak bisa diunduh satuan. Backfill arsip lama:
@@ -292,12 +319,22 @@ migrasi skema:
 ```
 python cadangkan_db.py            # -> data/backup/catur-YYYYMMDD-HHMMSS.db, simpan 5 terakhir
 python cadangkan_db.py --daftar   # cadangan yang ada
+python cadangkan_db.py --inti     # ekspor kecil (partai sendiri + analisis + latihan) -> data/backup/ DAN folder OneDrive\catur-cadangan
 ```
 
-Memakai backup API SQLite, jadi aman dijalankan saat server dan analisis
-batch sedang hidup. Salinan diperiksa `integrity_check` sebelum dianggap jadi.
-Ukuran 368 MB, sekitar 25 detik. Memulihkan = matikan server, salin berkas
-cadangan ke `data/catur.db`.
+Memakai `VACUUM INTO` (satu snapshot baca), jadi aman dijalankan saat server
+dan analisis batch sedang hidup. Salinan diperiksa `integrity_check` sebelum
+dianggap jadi. Database ±4,8 GB, jadi cadangan butuh beberapa menit.
+
+**Memulihkan** — urutannya penting:
+
+1. Matikan server, penjaga antrean, dan semua batch analisis.
+2. Hapus `data/catur.db-wal` dan `data/catur.db-shm` kalau ada. **Jangan
+   dilewati:** sisa WAL dari database lama akan diputar SQLite ke atas cadangan
+   begitu dibuka; `integrity_check` tetap "ok", tapi isinya campuran dan bukan
+   cadangan itu lagi (terbukti 28 Sep 2026).
+3. Salin berkas cadangan ke `data/catur.db`.
+4. `python -m app.db --info` — jumlah partai harus sama dengan saat cadangan dibuat.
 
 ## Yang belum ada (Phase 4+)
 

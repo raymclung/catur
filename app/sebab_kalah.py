@@ -26,6 +26,7 @@ untuk saya" pada partai yang justru kena mat.
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 
@@ -36,7 +37,6 @@ from .db import koneksi
 
 router = APIRouter(prefix="/api", tags=["kekalahan"])
 
-BLUNDER_CP = 300        # ambang blunder
 DETIK_CEPAT = 2.0       # blunder secepat ini kemungkinan missclick/pre-move
 SUDAH_KALAH_CP = -300   # di bawah ini posisinya dianggap sudah kalah
 MAT_CP = 100_000        # nilai yang dipakai analisis untuk mewakili mat
@@ -74,7 +74,8 @@ def detik_dipakai(jam: list[float], ply: int, kontrol: str | None) -> float | No
     if not jam or ply >= len(jam) or ply < 0:
         return None
     try:
-        inc = int(str(kontrol or "").split("+")[1]) if "+" in str(kontrol or "") else 0
+        # float, bukan int: Chess.com menulis "10+0.1" (223 partai Ray).
+        inc = float(str(kontrol or "").split("+")[1]) if "+" in str(kontrol or "") else 0
     except ValueError:
         inc = 0
     sebelum = jam[ply - 2] if ply >= 2 else _angka_awal(kontrol)
@@ -133,6 +134,37 @@ def _teks_blunder(b: dict, detik: float | None) -> str:
     return f"{nomor}{b['san']} ({hilang}{ekor}){terbaik}"
 
 
+def _peluang(cp: int) -> float:
+    """Peluang menang 0..1, rumus Lichess — sama dengan `peluang_menang` di
+    catur_analysis/partai.py (disalin supaya modul ini tidak mengimpor engine)."""
+    cp = max(-1000, min(1000, cp))
+    return 1 / (1 + math.exp(-0.00368208 * cp))
+
+
+def blunder_penentu(blunder: list[dict]) -> dict | None:
+    """
+    Blunder yang benar-benar membuang partai: turun PELUANG MENANG terbesar,
+    hanya dari posisi yang BELUM kalah.
+
+    Dulu diurutkan menurut `kehilangan_cp`, yang dibatasi 1000 — membiarkan
+    mat saat sudah -5 pun bernilai 1000 — lalu blunder cepat mana pun
+    diutamakan. Hasilnya 87 dari 500 kekalahan menunjuk langkah di posisi yang
+    sudah kalah, padahal blunder penentunya lebih awal (audit 28 Sep 2026).
+    Kalau semua blunder terjadi di posisi yang sudah kalah, partainya hilang
+    lewat hal lain dulu: tidak ada penentu (sebabnya "dikalahkan").
+    """
+    kandidat = []
+    for l in blunder:
+        sebelum = l.get("eval_sebelum_cp")
+        if sebelum is None:            # baris lama tanpa eval_sebelum: perkirakan
+            sebelum = (l.get("eval_sesudah_cp") or 0) + (l.get("kehilangan_cp") or 0)
+        if sebelum <= SUDAH_KALAH_CP:
+            continue
+        turun = _peluang(sebelum) - _peluang(l.get("eval_sesudah_cp") or 0)
+        kandidat.append((-turun, l["ply"], l))
+    return min(kandidat, key=lambda k: k[:2])[2] if kandidat else None
+
+
 def golongkan(pgn: str, kontrol_waktu: str | None, warna: str,
               langkah_saya: list[dict], ada_analisis: bool) -> dict:
     """
@@ -147,8 +179,8 @@ def golongkan(pgn: str, kontrol_waktu: str | None, warna: str,
              "zeitnot": akhir is not None and akhir < ZEITNOT_DETIK,
              "habis_waktu": False}
 
-    blunder = sorted((l for l in langkah_saya if (l.get("kehilangan_cp") or 0) >= BLUNDER_CP),
-                     key=lambda l: -l["kehilangan_cp"])
+    blunder = [l for l in langkah_saya if l.get("klasifikasi") == "blunder"]
+    penentu = blunder_penentu(blunder)
 
     awalan = ""
     if kalah_waktu(tags):
@@ -168,13 +200,14 @@ def golongkan(pgn: str, kontrol_waktu: str | None, warna: str,
         hasil["keterangan"] = "jalankan analisis engine untuk mengetahui sebabnya"
         return hasil
 
-    if blunder:
-        cepat = [l for l in blunder
-                 if (d := detik_dipakai(jam, l["ply"], kontrol_waktu)) is not None and d <= DETIK_CEPAT]
-        b = cepat[0] if cepat else blunder[0]
+    if penentu:
+        b = penentu
         detik = detik_dipakai(jam, b["ply"], kontrol_waktu)
         saat = jam_sendiri(jam, warna, b["ply"])
-        hasil["sebab"] = "missclick" if cepat else "blunder"
+        # Missclick hanya kalau blunder YANG MEMBUANG PARTAI itu sendiri yang
+        # dimainkan secepat itu; dulu blunder cepat mana pun didahulukan,
+        # termasuk yang terjadi saat posisi sudah hancur.
+        hasil["sebab"] = "missclick" if detik is not None and detik <= DETIK_CEPAT else "blunder"
         hasil["ply"] = b["ply"]
         hasil["zeitnot"] = saat is not None and saat < ZEITNOT_DETIK
         ket = _teks_blunder(b, detik)
@@ -195,16 +228,21 @@ def golongkan(pgn: str, kontrol_waktu: str | None, warna: str,
 
 # ------------------------------------------------------------- kumpulan
 
-def _lolos_lawan(gelar_lawan: str | None, elo_lawan: int | None, mode: str) -> bool:
-    if mode == "semua":
-        return True
-    bergelar = bool(gelar_lawan)
-    kuat = bool(elo_lawan and elo_lawan > AMBANG_ELO_LAWAN)
-    if mode == "gelar":
-        return bergelar
-    if mode == "2200":
-        return kuat
-    return bergelar or kuat
+def _syarat_lawan(mode: str, tanda: str) -> str:
+    """
+    Saringan lawan sebagai SQL, supaya berlaku SEBELUM LIMIT.
+
+    Audit 27 Sep 2026: dulu SQL mengambil `batas * 3` kekalahan terbaru lalu
+    Python menyaringnya; lawan bergelar yang jarang tidak pernah terambil
+    (akun Ray: 147 dari 263 kekalahan melawan pemain bergelar, bahkan dengan
+    batas 500). Placeholder `tanda` dipakai dua kali: urutan parameternya
+    diatur pemanggil.
+    """
+    gelar = (f"COALESCE(CASE WHEN g.putih_id IN ({tanda}) THEN pb.gelar"
+             f" ELSE pw.gelar END, '') <> ''")
+    kuat = (f"COALESCE(CASE WHEN g.putih_id IN ({tanda}) THEN g.elo_hitam"
+            f" ELSE g.elo_putih END, 0) > {int(AMBANG_ELO_LAWAN)}")
+    return {"semua": "", "gelar": gelar, "2200": kuat}.get(mode, f"({gelar} OR {kuat})")
 
 
 def kekalahan(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | None = None,
@@ -233,27 +271,21 @@ def kekalahan(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | No
     if format_ and format_ != "semua":
         sql += " AND g.format = ?"
         params.append(format_)
+    syarat_lawan = _syarat_lawan(lawan, tanda)
+    if syarat_lawan:
+        sql += f" AND {syarat_lawan}"
+        params += list(pemain_ids) * syarat_lawan.count(f"IN ({tanda})")
     sql += " ORDER BY g.tanggal DESC, g.id DESC LIMIT ?"
-    params.append(max(1, min(int(batas), 500)) * 3)      # ambil lebih, saringan lawan di bawah
+    params.append(max(1, min(int(batas), 500)))
 
-    baris = conn.execute(sql, params).fetchall()
-
-    dipakai = []
-    for r in baris:
-        warna = r["warna_saya"]
-        gelar_lawan = r["hitam_gelar"] if warna == "putih" else r["putih_gelar"]
-        elo_lawan = r["elo_hitam"] if warna == "putih" else r["elo_putih"]
-        if _lolos_lawan(gelar_lawan, elo_lawan, lawan):
-            dipakai.append(r)
-        if len(dipakai) >= batas:
-            break
+    dipakai = conn.execute(sql, params).fetchall()
 
     # langkah analisis untuk partai-partai itu, sekali jalan
     per_partai: dict[int, list[dict]] = {}
     if dipakai:
         tanda_id = ",".join("?" * len(dipakai))
         q = f"""SELECT partai_id, ply, nomor_langkah, warna, san, kehilangan_cp, klasifikasi,
-                       eval_sesudah_cp, mat_sesudah, langkah_terbaik_san
+                       eval_sebelum_cp, eval_sesudah_cp, mat_sesudah, langkah_terbaik_san
                 FROM analisis_langkah WHERE partai_id IN ({tanda_id}) ORDER BY ply"""
         for l in conn.execute(q, [r["id"] for r in dipakai]):
             per_partai.setdefault(l["partai_id"], []).append(dict(l))

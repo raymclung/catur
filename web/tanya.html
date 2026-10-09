@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tanya — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/tebak.html" title="Main sebagai GM di partai aslinya dan tebak langkahnya">Tebak GM</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+    <a href="/tanya" class="aktif" title="Tanya database pakai bahasa Indonesia">Tanya</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <p class="kecil redup" style="margin:0 0 10px">
+    Pertanyaannya diubah jadi SQL oleh model bahasa, tapi
+    <strong>database yang menjawab</strong> — dan SQL-nya selalu ditampilkan,
+    supaya tiap angka bisa kamu periksa sendiri. Modelnya jalan di komputer ini
+    (Ollama), tidak ada yang dikirim ke internet.
+  </p>
+
+  <div id="keadaan" class="kecil redup" style="margin:0 0 12px">Memeriksa Ollama…</div>
+
+  <form class="saring" id="form-tanya" autocomplete="off" style="margin-bottom:10px">
+    <input type="text" id="pertanyaan" maxlength="500" style="flex:1;min-width:260px"
+           placeholder="mis. 5 pemain dengan partai terbanyak"
+           title="Tulis pertanyaan biasa dalam bahasa Indonesia">
+    <label class="label-mini" for="mode">Tentang</label>
+    <select id="mode" title="Data di database, atau aplikasi ini sendiri">
+      <option value="database" selected>Database partai</option>
+      <option value="aplikasi">Aplikasi ini</option>
+    </select>
+    <button type="submit" id="tombol-tanya">Tanya</button>
+  </form>
+
+  <div class="saring" id="contoh" style="margin-bottom:14px">
+    <span class="label-mini">Contoh</span>
+    <button type="button" class="contoh-tanya">5 pemain dengan partai terbanyak</button>
+    <button type="button" class="contoh-tanya">berapa partai per sumber</button>
+    <button type="button" class="contoh-tanya">pembukaan apa yang paling sering saya kalah</button>
+  </div>
+
+  <div id="menunggu" class="kecil redup" hidden>
+    Model sedang berpikir. Di mesin ini biasanya 20–60 detik, dan lebih lama
+    lagi kalau batch analisis engine sedang berjalan.
+  </div>
+
+  <section id="jawaban" hidden>
+    <div id="peringatan"></div>
+
+    <h2 class="kecil" style="margin:14px 0 4px">Jawaban</h2>
+    <div id="isi-jawaban"></div>
+
+    <details id="kotak-sql" style="margin-top:12px">
+      <summary class="kecil">SQL yang dipakai</summary>
+      <pre id="sql" class="kecil" style="overflow:auto"></pre>
+    </details>
+
+    <details id="kotak-peta" style="margin-top:12px" hidden>
+      <summary class="kecil">Peta aplikasi yang dibacakan ke model</summary>
+      <pre id="peta" class="kecil" style="overflow:auto"></pre>
+    </details>
+  </section>
+</main>
+
+<script src="/static/tanya.js"></script>
+</body>
+</html>

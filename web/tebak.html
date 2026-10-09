@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tebak Langkah GM — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/vendor/chessboard.min.css">
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/tebak.html" class="aktif" title="Main sebagai GM di partai aslinya dan tebak langkahnya">Tebak GM</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+    <a href="/tanya" title="Tanya database pakai bahasa Indonesia">Tanya</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="papan-tata">
+    <div>
+      <div id="papan"></div>
+      <div class="alat">
+        <span class="status-posisi" id="status">memuat…</span>
+        <button id="petunjuk" title="Tandai bidak yang digerakkan GM (H)">Petunjuk</button>
+        <button id="tunjukkan" title="Lihat langkah GM tanpa menebak; tidak dihitung (S)">Tunjukkan</button>
+        <button id="partai-lain" title="Ambil partai acak lain (N)">Partai lain ›</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="saring" style="margin-bottom:12px">
+        <label>GM
+          <select id="gm" title="Pemain bergelar GM dengan partai terbanyak di database"></select>
+        </label>
+        <label>Warna GM
+          <select id="warna">
+            <option value="acak" selected>acak</option>
+            <option value="putih">putih</option>
+            <option value="hitam">hitam</option>
+          </select>
+        </label>
+        <label>Hasil
+          <select id="hasil" title="Partai yang dimenangkan GM paling jelas menunjukkan rencananya">
+            <option value="menang" selected>GM menang</option>
+            <option value="semua">semua hasil</option>
+          </select>
+        </label>
+        <label>Mulai dari
+          <select id="mulai" title="Langkah pembukaan sebelum ini dimainkan otomatis">
+            <option value="1">langkah 1</option>
+            <option value="8" selected>langkah 8</option>
+            <option value="15">langkah 15</option>
+          </select>
+        </label>
+        <div class="latihan-strip" id="skor"></div>
+      </div>
+
+      <div class="kartu">
+        <h2 class="judul-kartu">Partai <span class="kanan redup kecil" id="nomor"></span></h2>
+        <div class="latihan-isi" id="info"><div class="pesan kecil">memuat…</div></div>
+      </div>
+
+      <div class="kartu" style="margin-top:16px" id="kartu-nilai" hidden>
+        <div class="latihan-isi" id="nilai"></div>
+      </div>
+
+      <div class="kartu" style="margin-top:16px">
+        <h2 class="judul-kartu">Tebakanmu <span class="kanan redup kecil">✓ sama GM · ○ bagus · ~ kurang tepat · ✗ meleset</span></h2>
+        <div class="latihan-isi tebak-riwayat" id="riwayat"><div class="pesan kecil">belum ada</div></div>
+      </div>
+
+      <details class="kartu kartu-catatan">
+        <summary class="judul-kartu">Cara menilai</summary>
+        <div class="latihan-isi kecil">
+          <p>Langkah yang <b>sama dengan GM</b> langsung dianggap benar. Kalau berbeda,
+          Stockfish di server menilai posisi sebelum dan sesudah langkahmu (±1,5 detik
+          tiap permintaan), lalu penurunan peluang menangnya diklasifikasikan dengan
+          ambang yang sama dengan analisis partai (aturan Lichess): di bawah 0,1 =
+          <b>bagus</b>, 0,1–0,2 = <b>kurang tepat</b>, di atasnya = <b>meleset</b>.</p>
+          <p>Penilaian 1,5 detik tidak sedalam analisis partai. Label langkah GM diambil
+          dari analisis yang tersimpan di database, dan kedalamannya disebut apa adanya.</p>
+          <p>Kalau engine sedang dipakai permintaan lain, langkahmu dicatat
+          <b>tak dinilai</b>, bukan dianggap salah.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</main>
+
+<script src="/static/vendor/jquery.min.js"></script>
+<script src="/static/vendor/chessboard.min.js"></script>
+<script src="/static/vendor/chess.js"></script>
+<script src="/static/pilih-promosi.js"></script>
+<script src="/static/klik-papan.js"></script>
+<script src="/static/alat-catur.js"></script>
+<script src="/static/tebak.js"></script>
+</body>
+</html>

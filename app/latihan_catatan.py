@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .db import koneksi, sekarang
 
@@ -83,6 +83,22 @@ def ulang_semua(conn, mode: str) -> int:
     return n
 
 
+TANGGAL_TERAWAL = date(2000, 1, 1)
+MAKS_KUNCI = 200
+
+
+def teks_sah(teks) -> bool:
+    """Teks yang bisa disimpan: string, tidak kosong/spasi, tidak terlalu
+    panjang, dan bisa di-encode UTF-8 (surrogate tunggal dari JSON dulu 500)."""
+    if not isinstance(teks, str) or not teks.strip() or len(teks) > MAKS_KUNCI:
+        return False
+    try:
+        teks.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def impor_catatan_lama(conn, catatan: dict) -> int:
     """Catatan localStorage -> baris database, sekali saja.
 
@@ -90,20 +106,29 @@ def impor_catatan_lama(conn, catatan: dict) -> int:
     dikirim berulang. Nilai lama berupa teks = waktu jawaban benar."""
     ada = {(m, k) for m, k in conn.execute("SELECT DISTINCT mode, kunci FROM latihan_jawaban")}
     n = 0
+    hari_ini = date.today()
     for kunci, nilai in catatan.items():
-        if not isinstance(kunci, str) or not kunci:
+        if not teks_sah(kunci):
             continue
         if isinstance(nilai, str):
             nilai = {"h": "b", "w": nilai[:10]}
-        if not isinstance(nilai, dict) or nilai.get("h") not in DARI_HURUF:
+        # isinstance dulu: {"h": ["b"]} dulu TypeError (unhashable) -> 500.
+        if not isinstance(nilai, dict) or not isinstance(nilai.get("h"), str) \
+                or nilai["h"] not in DARI_HURUF:
             continue
         mode = mode_dari_kunci(kunci)
         if (mode, kunci) in ada:
             continue
+        # Tanggal yang tidak sah atau di luar akal DILEWATI, bukan diganti hari
+        # ini diam-diam. Tahun < 1970 dulu 500 (astimezone di Windows) dan
+        # menggagalkan seluruh kiriman; tahun 2999 membuat soal "menunggu"
+        # selamanya (audit 28 Sep 2026).
         try:
             hari = date.fromisoformat(str(nilai.get("w", ""))[:10])
         except ValueError:
-            hari = date.today()
+            continue
+        if not TANGGAL_TERAWAL <= hari <= hari_ini:
+            continue
         # tengah hari waktu lokal supaya tanggalnya tidak bergeser saat dibaca lagi
         waktu = datetime(hari.year, hari.month, hari.day, 12).astimezone().isoformat(timespec="seconds")
         conn.execute(
@@ -172,10 +197,18 @@ def ringkasan(conn, hari_ini: date | None = None, jumlah_minggu: int = 8) -> dic
 # ---------------------------------------------------------------- RUTE
 
 class Jawaban(BaseModel):
-    kunci: str = Field(..., min_length=1, max_length=200)
+    kunci: str = Field(..., min_length=1, max_length=MAKS_KUNCI)
     hasil: str = Field(..., pattern="^(benar|salah|menyerah|pilihan)$")
     langkah_uci: str | None = Field(None, pattern="^[a-h][1-8][a-h][1-8][qrbn]?$")
     kelompok: str | None = Field(None, max_length=60)
+
+    @field_validator("kunci", "kelompok")
+    @classmethod
+    def _bisa_disimpan(cls, v):
+        # " " dan surrogate tunggal dulu lolos; yang kedua jadi 500 di SQLite.
+        if v is not None and not teks_sah(v):
+            raise ValueError("teks kosong atau berisi karakter yang tidak bisa disimpan")
+        return v
 
 
 class CatatanLama(BaseModel):

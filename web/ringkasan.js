@@ -235,6 +235,54 @@
       d.per_kekuatan_lawan,
       "Kolom terakhir menjawab: apakah kesalahan muncul lebih awal saat lawan lebih kuat?"));
 
+    /* per format waktu: bullet/blitz/rapid dimainkan dengan cara berbeda,
+       jadi angkanya tidak boleh dicampur begitu saja. */
+    if (d.per_format && d.per_format.length > 1) {
+      el.isi.appendChild(tabel("Per format waktu",
+        [{ label: "Format", nilai: function (b) { return b.nama; }, kelas: "nama" }].concat(KOLOM_UMUM),
+        d.per_format));
+    }
+
+    /* per hasil + perkiraan tertimbang: satu-satunya angka di halaman ini yang
+       tidak ikut condong ke kekalahan. */
+    if (d.per_hasil && d.per_hasil.length > 1) {
+      el.isi.appendChild(tabel("Per hasil partai",
+        [{ label: "Hasil", nilai: function (b) { return b.nama; }, kelas: "nama" }]
+          .concat(KOLOM_UMUM.filter(function (k) { return k.label !== "Skor"; })),
+        d.per_hasil,
+        "Di dalam satu kelompok tidak ada condong: semua partai kalah sama-sama kalah. " +
+        "Bandingkan akurasi saat menang dan saat kalah."));
+    }
+    var pt = d.perkiraan_tertimbang;
+    if (pt) {
+      var kartuPt = buat("div", "kartu");
+      kartuPt.style.marginTop = "16px";
+      kartuPt.appendChild(buat("h2", "judul-kartu", "Perkiraan setelah condong dikoreksi"));
+      var isiPt = buat("div", "latihan-isi");
+      var kotakPt = buat("div", "akurasi-kotak");
+      kotakPt.style.gridTemplateColumns = "repeat(4, 1fr)";
+      [["Skor", angka(pt.skor_persen, "%")],
+       ["Akurasi", angka(pt.akurasi, "%")],
+       ["Rata loss per langkah", angka(pt.rata_kehilangan, " cp")],
+       ["?? per partai", angka(pt.blunder_per_partai)]
+      ].forEach(function (x) {
+        var k = buat("div");
+        k.appendChild(buat("div", "label", x[0]));
+        k.appendChild(buat("div", "angka-besar", x[1]));
+        kotakPt.appendChild(k);
+      });
+      isiPt.appendChild(kotakPt);
+      isiPt.appendChild(buat("div", "kecil redup",
+        "Tiap angka dihitung di dalam kelompok menang/kalah/remis, lalu dirata-ratakan ulang " +
+        "memakai porsi hasil seluruh partai (" +
+        ["menang", "remis", "kalah"].filter(function (k) { return pt.dasar[k]; }).map(function (k) {
+          return persenID(pt.dasar[k]) + "% " + k;
+        }).join(", ") + "). Dasarnya " + angkaID(pt.partai_dipakai) + " partai teranalisis; " +
+        "tetap perkiraan, bukan hasil analisis semua partai."));
+      kartuPt.appendChild(isiPt);
+      el.isi.appendChild(kartuPt);
+    }
+
     /* per pembukaan */
     el.isi.appendChild(tabel("Per pembukaan (15 terbanyak)",
       [{ label: "Pembukaan", nilai: function (b) { return b.nama; }, kelas: "nama" }].concat(KOLOM_UMUM),

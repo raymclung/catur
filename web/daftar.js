@@ -20,6 +20,7 @@
     ecoDari: document.getElementById("eco_dari"),
     ecoSampai: document.getElementById("eco_sampai"),
     fen: document.getElementById("fen"),
+    format: document.getElementById("format"),
     repertoire: document.getElementById("repertoire"),
     saringanAktif: document.getElementById("saringan-aktif"),
     urut: document.getElementById("urut"),
@@ -192,6 +193,7 @@
       p.set("eco_sampai", el.ecoSampai.value);
     }
     if (el.fen.value) p.set("fen", el.fen.value);
+    if (el.format.value) p.set("format", el.format.value);
     p.set("urut", el.urut.value);
     p.set("halaman", halamanSekarang);
     p.set("per_halaman", 25);
@@ -226,10 +228,15 @@
         s.turnamen.toLocaleString("id-ID") + " turnamen";
 
       s.sumber.forEach(function (x) {
-        var o = document.createElement("option");
-        o.value = x.sumber;
+        var o = Array.prototype.filter.call(el.sumber.options, function (op) {
+          return op.value === x.sumber;
+        })[0];
+        if (!o) {
+          o = document.createElement("option");
+          o.value = x.sumber;
+          el.sumber.appendChild(o);
+        }
         o.textContent = x.sumber + " (" + x.jumlah + ")";
-        el.sumber.appendChild(o);
       });
     }).catch(function (e) {
       el.ringkasan.textContent = "";
@@ -271,6 +278,7 @@
     el.ecoDari.value = "";
     el.ecoSampai.value = "";
     el.fen.value = "";
+    el.format.value = "";
     el.urut.value = "terbaru";
     /* centang "Tanpa partai saya" sengaja tidak ikut direset: itu pilihan tetap */
     halamanSekarang = 1;
@@ -331,6 +339,7 @@
     }
     if (el.ecoDari.value && el.ecoSampai.value) daftarChip.push(chip("ECO " + el.ecoDari.value + "–" + el.ecoSampai.value));
     if (el.fen.value) daftarChip.push(chip(labelFen(el.fen.value), "/jelajah?fen=" + encodeURIComponent(el.fen.value), el.fen.value));
+    if (el.format.value) daftarChip.push(chip("Format " + el.format.value));
     el.saringanAktif.textContent = "";
     el.saringanAktif.hidden = daftarChip.length === 0;
     if (!daftarChip.length) return;
@@ -380,7 +389,7 @@
      halaman partai) bisa diperiksa. Nilai bawaan (urut terbaru, halaman 1)
      tidak ditulis supaya URL tetap pendek. */
   var KUNCI_URL = ["cari", "eco", "sumber", "hasil", "gelar", "dianalisis",
-                   "pemain_id", "warna", "eco_dari", "eco_sampai", "fen", "urut", "halaman"];
+                   "pemain_id", "warna", "eco_dari", "eco_sampai", "fen", "format", "urut", "halaman"];
 
   function tulisUrl(p) {
     var q = new URLSearchParams();
@@ -400,7 +409,19 @@
     var q = new URLSearchParams(window.location.search);
     KUNCI_URL.forEach(function (k) {
       var e = document.getElementById(k);
-      if (e && q.get(k)) e.value = q.get(k);
+      if (!e || !q.get(k)) return;
+      e.value = q.get(k);
+      /* Pilihan Sumber baru diisi muatStatistik() SETELAH ini, jadi nilai
+         dari URL dulu diabaikan browser: /?sumber=lichess-user menampilkan
+         semua 273.628 partai (audit 27 Sep 2026). Opsi sementara menahannya
+         sampai daftar dari server datang dan memberinya jumlah. */
+      if (e === el.sumber && e.value !== q.get(k)) {
+        var o = document.createElement("option");
+        o.value = q.get(k);
+        o.textContent = q.get(k);
+        e.appendChild(o);
+        e.value = q.get(k);
+      }
     });
     var h = parseInt(q.get("halaman") || "1", 10);
     if (h > 1) halamanSekarang = h;

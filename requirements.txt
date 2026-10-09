@@ -1,0 +1,7 @@
+# Kebutuhan menjalankan server dan tes. Stockfish TIDAK ada di sini: engine
+# adalah berkas biner di engine/, dan tes yang membutuhkannya melewati diri
+# sendiri kalau tidak ada.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-chess>=1.11
+pydantic>=2.5
