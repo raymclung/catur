@@ -340,6 +340,11 @@ from .tanya_web import router as router_tanya   # noqa: E402
 
 aplikasi.include_router(router_tanya)
 
+# Analisis tanpa henti di papan analisis: engine & kunci sama dengan /api/evaluasi.
+from .evaluasi_aliran import router as router_evaluasi_aliran   # noqa: E402
+
+aplikasi.include_router(router_evaluasi_aliran)
+
 # Pembantu analisis: tablet/HP di WiFi rumah menghitung dengan Stockfish browser.
 from .pembantu import HEADER_PROXY, boleh_dari_luar, router as router_pembantu   # noqa: E402
 

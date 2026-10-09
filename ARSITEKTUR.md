@@ -1075,11 +1075,28 @@ Posisi yang sudah selesai (mat/remis) dijawab tanpa memanggil engine:
 
 ### Ditunda ke versi berikutnya (dicatat, bukan dilupakan)
 
-Analisis tanpa henti (SSE/WebSocket), engine di browser (WASM), menyimpan
-posisi hasil susun ke database. (Memicu analisis partai penuh dari tombol web
-sudah ada: tombol "Analisa partai ini dengan engine" di kartu "Belum
-dianalisis" halaman partai (`web/ringkasan-analisis.js`) membuka
-`/static/mesin.html?kelompok=id&id=<partai>`.)
+Yang masih ditunda: engine di browser (WASM) untuk papan analisis.
+
+Yang dulu tercatat di sini dan sekarang sudah ada (diperiksa 9 Okt 2026):
+
+- **Analisis tanpa henti** — tombol **Terus** di `/analisis`,
+  `GET /api/evaluasi/aliran` (`app/evaluasi_aliran.py`, SSE). Engine dan
+  kunci SAMA dengan `/api/evaluasi`, jadi tetap satu Stockfish server; selama
+  aliran berjalan `/api/evaluasi` menjawab 409. Depth naik satu per satu
+  (tiap kiriman = multipv lengkap pada satu depth), berhenti saat Henti /
+  posisi berubah / tab ditutup / depth 30 / 2 menit. Koneksi putus →
+  `Stockfish.evaluasi(berhenti=...)` menghentikan pencarian dalam ~0,1 s dan
+  kunci baru dilepas sesudah engine benar-benar berhenti. Bukti di Edge
+  sungguhan (DevTools, waktu nyata): depth 8 → 17 dalam 3 s; `/api/evaluasi`
+  0,3 s sesudah Henti → 200; posisi diganti ke mat-1 → Terus berhenti dan
+  evaluasi otomatis menampilkan +M1. Frontend memakai fetch + ReadableStream,
+  bukan EventSource (EventSource tidak bisa membaca 409 dan menyambung ulang
+  sendiri sesudah server menutup aliran).
+- **Menyimpan posisi hasil susun** — tombol Simpan di `/analisis`
+  (`web/simpan-posisi.js`, tabel `posisi_tersimpan`, skema v5).
+- **Memicu analisis partai penuh dari tombol web** — "Analisa partai ini
+  dengan engine" di kartu "Belum dianalisis" halaman partai
+  (`web/ringkasan-analisis.js`) membuka `/static/mesin.html?kelompok=id&id=<partai>`.
 
 ---
 

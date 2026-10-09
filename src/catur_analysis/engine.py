@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -221,6 +222,7 @@ class Stockfish:
         depth: int | None = None,
         multipv: int = 1,
         waktu: float | None = None,
+        berhenti: threading.Event | None = None,
     ) -> list[dict]:
         """
         Analisis satu posisi.
@@ -235,6 +237,12 @@ class Stockfish:
 
         Sudut pandang sengaja selalu Putih, bukan "pemain yang jalan", supaya
         grafik evaluasi nanti tidak bolak-balik tandanya tiap langkah.
+        
+        `berhenti`: kalau diberikan dan di-set dari utas lain, pencarian
+        dihentikan dalam ~0,1 detik dan hasil sejauh itu dikembalikan.
+        Dipakai analisis tanpa henti di papan (app/evaluasi_aliran.py):
+        tanpa ini, menekan Henti tetap menahan engine sampai langkah yang
+        sedang dihitung selesai, dan evaluasi posisi berikutnya ditolak 409.
         """
         self._pastikan_hidup()
 
@@ -242,7 +250,10 @@ class Stockfish:
         # tercapai: kedalaman atau waktu. Dipakai papan analisis web supaya
         # jawabannya selalu datang dalam ~1,5 detik; batch tetap pakai depth.
         limit = chess.engine.Limit(depth=depth or self.profil.depth, time=waktu)
-        hasil = self._engine.analyse(board, limit, multipv=multipv)
+        if berhenti is None:
+            hasil = self._engine.analyse(board, limit, multipv=multipv)
+        else:
+            hasil = self._analisis_bisa_dihentikan(board, limit, multipv, berhenti)
 
         # analyse() mengembalikan dict kalau multipv=1, list kalau lebih.
         if isinstance(hasil, dict):
@@ -281,6 +292,24 @@ class Stockfish:
             langkah_san.append(papan_sementara.san(move))
             papan_sementara.push(move)
         return langkah_san
+
+    def _analisis_bisa_dihentikan(self, board, limit, multipv: int,
+                                  berhenti: threading.Event) -> list:
+        """Seperti analyse(), tapi berhenti begitu `berhenti` di-set.
+
+        `wait()` diletakkan di utas pembantu karena tidak punya batas waktu;
+        utas ini mengawasi `berhenti` dan memanggil `stop()`, yang aman
+        dipanggil dari utas mana pun pada SimpleAnalysisResult.
+        """
+        with self._engine.analysis(board, limit, multipv=multipv) as analisis:
+            penunggu = threading.Thread(target=analisis.wait, daemon=True)
+            penunggu.start()
+            while penunggu.is_alive():
+                if berhenti.wait(0.1):
+                    analisis.stop()
+                    break
+            penunggu.join()
+            return [info for info in analisis.multipv if "score" in info]
 
     def _pastikan_hidup(self) -> None:
         if self._engine is None:
