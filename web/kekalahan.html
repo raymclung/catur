@@ -46,6 +46,7 @@
         <option value="ketentuan" selected>rating &gt; 2200 atau bergelar</option>
         <option value="2200">hanya rating &gt; 2200</option>
         <option value="gelar">hanya bergelar</option>
+        <option value="gmim">hanya GM/IM</option>
         <option value="semua">semua lawan</option>
       </select>
     </label>
@@ -70,6 +71,21 @@
 
   <div class="kartu">
     <div class="akurasi-kotak sebab-kotak" id="ikhtisar"></div>
+  </div>
+
+  <div class="kartu" style="margin-top:16px">
+    <h2 class="judul-kartu">Pembukaan yang paling sering kalah <span class="redup kecil" id="jumlah-pembukaan"></span></h2>
+    <div class="kecil redup">
+      Dari <strong>semua</strong> partai selesai melawan lawan pilihan di atas (tidak harus sudah
+      dianalisis; pilihan "Partai terbaru" tidak berlaku di sini), per keluarga ECO dan warna.
+      Baris redup = kurang dari 5 partai, persentasenya belum bisa dipegang.
+    </div>
+    <div class="gulir" style="margin-top:8px">
+      <table>
+        <thead><tr><th>Warna</th><th>Pembukaan</th><th>Partai</th><th>M / R / K</th><th>Skor</th><th>Kalah</th><th></th></tr></thead>
+        <tbody id="baris-pembukaan"><tr><td colspan="7" class="pesan kecil">memuat…</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="kartu" style="margin-top:16px">
