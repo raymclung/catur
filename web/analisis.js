@@ -18,6 +18,7 @@
   var permainan = new Chess();
   var orientasi = "white";
   var permintaan = null;        // AbortController evaluasi yang sedang berjalan
+  var fenTerus = null;          // FEN yang sedang dianalisis tanpa henti (null = tidak)
   var timerAuto = null;
   var garisTerakhir = [];       // hasil evaluasi terakhir, dipakai saat klik langkah
   var fenTerakhir = null;       // FEN yang dievaluasi garisTerakhir
@@ -47,7 +48,8 @@
     analisa: document.getElementById("analisa"),
     otomatis: document.getElementById("otomatis"),
     multipv: document.getElementById("multipv"),
-    depth: document.getElementById("depth")
+    depth: document.getElementById("depth"),
+    terus: document.getElementById("terus")
   };
 
   /* ---------- util ---------- */
@@ -299,6 +301,8 @@
   /* ---------- evaluasi ---------- */
 
   function jadwalkanEvaluasi() {
+    /* Posisi berubah: garis dari aliran lama tidak berlaku lagi. */
+    if (fenTerus !== null && fenSekarang() !== fenTerus) hentikanTerus();
     if (!el.otomatis.checked) return;
     clearTimeout(timerAuto);
     timerAuto = setTimeout(evaluasi, 350);
@@ -314,6 +318,9 @@
   }
 
   function evaluasi() {
+    /* Selama Terus berjalan engine sedang dipegang aliran; tombol Analisa
+       dimatikan, dan spasi juga tidak boleh memotongnya. */
+    if (fenTerus !== null) return;
     var fen = fenSekarang();
     var masalah = alasanTidakSah(fen);
     if (masalah) { statusEngine("Tidak dievaluasi · " + masalah, true); return; }
@@ -349,6 +356,107 @@
       .then(function () {
         if (permintaan && permintaan.signal === sinyal) { permintaan = null; el.analisa.disabled = false; }
       });
+  }
+
+  /* ---------- analisis tanpa henti (GET /api/evaluasi/aliran) ----------
+
+     fetch + ReadableStream, bukan EventSource: EventSource tidak bisa
+     membaca kode 409/422/503, dan otomatis menyambung ulang begitu server
+     menutup aliran — yang berarti analisis mulai lagi dari awal tanpa diminta.
+     Menghentikan = abort(); server melihat koneksi putus dan melepas engine
+     sesudah langkah yang sedang dihitung selesai. */
+
+  var BATAS_TERUS = 120;        // detik; sama dengan bawaan server
+
+  function hentikanTerus() {
+    if (fenTerus === null) return;
+    if (permintaan) permintaan.abort();
+    selesaiTerus();
+  }
+
+  function selesaiTerus() {
+    fenTerus = null;
+    permintaan = null;
+    el.terus.textContent = "Terus";
+    el.terus.classList.remove("utama");
+    el.analisa.disabled = false;
+  }
+
+  function analisisTerus() {
+    if (fenTerus !== null) { hentikanTerus(); statusEngine("Dihentikan."); return; }
+    var fen = fenSekarang();
+    var masalah = alasanTidakSah(fen);
+    if (masalah) { statusEngine("Tidak dievaluasi · " + masalah, true); return; }
+
+    if (permintaan) permintaan.abort();
+    clearTimeout(timerAuto);
+    permintaan = new AbortController();
+    var sinyal = permintaan.signal;
+    fenTerus = fen;
+    el.terus.textContent = "Henti";
+    el.terus.classList.add("utama");
+    el.analisa.disabled = true;
+    statusEngine("Menyalakan engine…");
+
+    var u = new URL("/api/evaluasi/aliran", window.location.origin);
+    u.searchParams.set("fen", fen);
+    u.searchParams.set("multipv", el.multipv.value);
+    u.searchParams.set("batas", String(BATAS_TERUS));
+
+    var alasanSelesai = { "depth-maks": "depth maksimum tercapai",
+                          "batas-waktu": (BATAS_TERUS >= 60 ? BATAS_TERUS / 60 + " menit" :
+                                          BATAS_TERUS + " detik") + " habis",
+                          "posisi-selesai": "posisi sudah selesai" };
+
+    fetch(u.toString(), { signal: sinyal }).then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          var body = null;
+          try { body = t ? JSON.parse(t) : null; } catch (e) { body = null; }
+          statusEngine(pesanGagal(r.status, body), true);
+        });
+      }
+      var pembaca = r.body.getReader();
+      var dekoder = new TextDecoder();
+      var sisa = "";
+      function baca() {
+        return pembaca.read().then(function (hasil) {
+          if (hasil.done) return;
+          sisa += dekoder.decode(hasil.value, { stream: true });
+          var potong;
+          while ((potong = sisa.indexOf("\n\n")) >= 0) {
+            olahKiriman(sisa.slice(0, potong));
+            sisa = sisa.slice(potong + 2);
+          }
+          return baca();
+        });
+      }
+      function olahKiriman(teks) {
+        var jenis = "message", data = "";
+        teks.split("\n").forEach(function (b) {
+          if (b.indexOf("event: ") === 0) jenis = b.slice(7);
+          else if (b.indexOf("data: ") === 0) data += b.slice(6);
+        });
+        var isi = null;
+        try { isi = JSON.parse(data); } catch (e) { return; }
+        if (sinyal.aborted || fenSekarang() !== fen) return;
+        if (jenis === "garis") {
+          tampilkanHasil(isi, fen);
+          el.engineMeta.textContent += " · terus " + String(isi.detik).replace(".", ",") + " s";
+          statusEngine("Terus menganalisis · depth " + isi.depth + " · tekan Henti untuk berhenti");
+        } else if (jenis === "selesai") {
+          statusEngine("Selesai: " + (alasanSelesai[isi.alasan] || isi.alasan) + ".");
+        } else if (jenis === "galat") {
+          statusEngine("Engine sedang dipakai. Coba lagi sebentar.", true);
+        }
+      }
+      return baca();
+    }).catch(function (e) {
+      if (e.name === "AbortError") return;
+      statusEngine("Gagal menghubungi server: " + e.message, true);
+    }).then(function () {
+      if (permintaan && permintaan.signal === sinyal) selesaiTerus();
+    });
   }
 
   /* Toleran terhadap bentuk respons: {garis:[...]} sesuai kontrak, atau list langsung. */
@@ -533,6 +641,7 @@
   ["K", "Q", "k", "q"].forEach(function (h) { el.rokade[h].addEventListener("change", perbaruiFen); });
 
   el.analisa.addEventListener("click", evaluasi);
+  el.terus.addEventListener("click", analisisTerus);
   el.multipv.addEventListener("change", function () { if (el.otomatis.checked) evaluasi(); });
   el.depth.addEventListener("change", function () { if (el.otomatis.checked) evaluasi(); });
 
@@ -563,6 +672,12 @@
     setTimeout(function () {
       urutan.forEach(function (sq, i) { setTimeout(function () { klikKotak(sq.trim()); }, 30 * i); });
     }, 200);
+  }
+  /* Kait pengujian headless: ?uji_terus=3 menekan Terus dengan batas 3 detik
+     (bawaannya 2 menit, terlalu lama untuk tes). */
+  if (parameter.get("uji_terus")) {
+    BATAS_TERUS = Math.max(1, parseInt(parameter.get("uji_terus"), 10) || 3);
+    setTimeout(analisisTerus, 300);
   }
   if (fenUrl) {
     if (!terapkanFen(fenUrl)) {

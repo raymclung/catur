@@ -98,6 +98,12 @@ Keduanya dipakai saringan `format=` di `/api/partai`, `/api/ringkasan`, dan
 
 Klik langkah mana pun di daftar untuk melompat ke sana.
 
+Di papan analisis (`/analisis`), **Analisa** (`spasi`) mengevaluasi posisi
+±1,5 detik; **Terus** menganalisis tanpa henti — depth naik dan garisnya
+diperbarui sampai kamu menekan **Henti**, posisinya berubah, depth 30, atau 2
+menit. Selama Terus berjalan, engine server dipegang aliran itu, jadi evaluasi
+di tab lain menjawab "engine sedang dipakai".
+
 ## Struktur
 
 ```

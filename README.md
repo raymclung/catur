@@ -23,6 +23,9 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   apa yang dimainkan GM dari posisi tertentu, beserta skornya.
 - **Analisis engine** — tiap langkah diklasifikasi (blunder/mistake/inaccuracy),
   akurasi, turning point, grafik evaluasi, eval bar di papan.
+- **Papan analisis tanpa henti** — tombol Terus mengalirkan garis Stockfish
+  (SSE) dengan depth yang terus naik; engine server tetap satu dan dilepas
+  dalam ~0,1 detik begitu dihentikan atau posisinya berubah.
 - **Antrean analisis** — batch Stockfish berjalan sebagai proses terpisah,
   dibatasi slot dan profil RAM supaya laptop tetap bisa dipakai; bisa dijeda
   dan dilanjutkan setelah komputer mati.
@@ -56,7 +59,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Batas arsitektur yang dijaga:** frontend hanya lewat `/api/...`, modul impor
   tidak tahu soal HTTP, `app/main.py` bebas SQL (dijaga tes arsitektur).
 - **Tanpa framework frontend dan tanpa CDN** — aplikasi jalan penuh tanpa internet.
-- **873 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+- **890 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
   jaringan lokal dan tes halaman di peramban headless yang dijalankan CI.
 
 ## Tech stack
