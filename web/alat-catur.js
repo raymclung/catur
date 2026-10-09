@@ -118,6 +118,17 @@ window.AlatCatur = (function () {
     return i >= 0 && jam[i] !== undefined ? jam[i] : null;
   }
 
+  /* Permainan chess.js di posisi awal partai yang sudah di-load_pgn: posisi
+     tag [FEN] kalau ada ("From Position", soal, partai tertunda), posisi
+     awal standar kalau tidak. Memutar ulang history() dari new Chess()
+     untuk partai ber-FEN menghasilkan partai karangan. */
+  function permainanAwal(permainan) {
+    var h = permainan.header ? permainan.header() : {};
+    var c = new Chess();
+    if (h && h.FEN && !c.load(h.FEN)) c = new Chess();
+    return c;
+  }
+
   function kalahWaktu(tags) {
     var t = (tags.Termination || "").toLowerCase();
     return t.indexOf("time forfeit") >= 0 || t.indexOf("on time") >= 0 || t.indexOf("waktu") >= 0;
@@ -134,6 +145,7 @@ window.AlatCatur = (function () {
     jamPerPly: jamPerPly,
     detikDipakai: detikDipakai,
     jamSendiri: jamSendiri,
-    kalahWaktu: kalahWaktu
+    kalahWaktu: kalahWaktu,
+    permainanAwal: permainanAwal
   };
 })();

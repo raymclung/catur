@@ -15,8 +15,8 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 
 ## Fitur
 
-- **Database partai GM** — impor dari arsip TWIC, broadcast resmi Lichess, dan
-  PGN lokal. Tiap partai menyimpan `sumber` dan `sumber_url`, jadi asal setiap
+- **Database partai GM** — impor dari arsip TWIC, broadcast resmi Lichess,
+  koleksi PGN Mentor, dan PGN lokal. Tiap partai menyimpan `sumber` dan `sumber_url`, jadi asal setiap
   partai selalu bisa ditelusuri. Impor aman diulang (sidik jari partai, tanpa
   duplikat).
 - **Jelajah posisi & repertoire** — indeks posisi (FEN) untuk melihat langkah
@@ -32,6 +32,13 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   dicari sebabnya (habis waktu, miss-click, atau blunder sungguhan), dipisah
   per format bullet/blitz/rapid/klasik.
 - **Halaman pemain** — rating, skor sebagai Putih/Hitam, pembukaan per ECO.
+- **Tebak langkah GM** — main sebagai GM di partai aslinya; tiap langkah dinilai
+  sama dengan GM, beda tapi tetap bagus menurut engine, atau meleset.
+- **Rencana latihan mingguan & ekspor repertoire** — kartu latihan disusun dari
+  kelemahan yang terukur; repertoire bisa diunduh sebagai PGN untuk dihafal di
+  Lichess Study atau HP.
+- **Tanya (opsional)** — pertanyaan bahasa biasa tentang isi database lewat LLM
+  lokal (Ollama), dengan kueri hanya-baca.
 
 ## Hal teknis yang menarik
 
@@ -42,10 +49,10 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   berkas lintas proses (`app/kunci_penulis.py`); permintaan yang bentrok dijawab
   HTTP 409 dengan nama pemegang kunci, bukan gagal diam-diam.
 - **Batas arsitektur yang dijaga:** frontend hanya lewat `/api/...`, modul impor
-  tidak tahu soal HTTP, SQL hanya ada di modul akses data.
+  tidak tahu soal HTTP, `app/main.py` bebas SQL (dijaga tes arsitektur).
 - **Tanpa framework frontend dan tanpa CDN** — aplikasi jalan penuh tanpa internet.
-- **404 tes unit** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
-  jaringan lokal.
+- **830 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+  jaringan lokal dan tes halaman di peramban headless yang dijalankan CI.
 
 ## Tech stack
 
@@ -60,7 +67,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 ## Menjalankan
 
 ```
-python -m pip install python-chess fastapi "uvicorn[standard]"
+python -m pip install -r requirements.txt
 python -m app.db                                   # buat database kosong
 python impor_pgn.py data/pgn/uji-scholars-mate.pgn # contoh partai
 python -m uvicorn app.main:aplikasi --reload

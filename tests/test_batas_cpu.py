@@ -94,7 +94,17 @@ class ProsesSungguhan(unittest.TestCase):
             finally:
                 k32.CloseHandle(h)
         finally:
+            # Tanpa menunggu & menutup pipa, unittest melaporkan
+            # "subprocess ... is still running" dan "unclosed file", dan proses
+            # anak-cucunya sempat hidup sesudah tes selesai (audit 21 Sep 2026).
+            for pid in (locals().get("anak"), induk.pid):
+                if pid:
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                   capture_output=True, creationflags=0x08000000)
             induk.kill()
+            induk.wait(timeout=10)
+            if induk.stdout:
+                induk.stdout.close()
 
 
 if __name__ == "__main__":

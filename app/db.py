@@ -12,20 +12,36 @@ Jalankan langsung untuk membuat/memeriksa database:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 AKAR = Path(__file__).resolve().parents[1]
-PATH_DB = AKAR / "data" / "catur.db"
+
+# Bawaannya database Ray. CATUR_DB dipakai untuk menjalankan server terhadap
+# database lain tanpa menyentuh yang asli — dipakai uji halaman headless
+# (tests/test_halaman_headless.py), supaya tes tidak pernah membaca atau
+# menulis data sungguhan.
+PATH_DB = Path(os.environ["CATUR_DB"]) if os.environ.get("CATUR_DB") else AKAR / "data" / "catur.db"
+
+# Berkas KEADAAN yang menyertai database — kunci penulis, antrean, pengaturan
+# mesin, catatan tugas, log, klaim analisis, cadangan — tinggal di folder
+# database yang sedang dipakai. Dulu semuanya dikeraskan ke data/ proyek, jadi
+# server uji dengan CATUR_DB lain tetap memegang kunci penulis Ray dan
+# mengantrekan pekerjaan ke antrean asli (audit 28 Sep 2026). Berkas SUMBER
+# (data/pgn, data/twic, cache FIDE) tetap di data/ proyek.
+FOLDER_DATA = PATH_DB.parent
 
 # Dinaikkan tiap kali skema berubah, supaya nanti bisa dideteksi kalau ada
 # database lama yang perlu dimigrasi. Disimpan lewat PRAGMA user_version
 # bawaan SQLite, jadi tidak perlu tabel tambahan.
-VERSI_SKEMA = 9   # v2 analisis; v3 sumber_impor; v4 posisi; v5 posisi_tersimpan;
+VERSI_SKEMA = 12  # v2 analisis; v3 sumber_impor; v4 posisi; v5 posisi_tersimpan;
                   # v6 akun_pribadi + format; v7 indeks penutup posisi;
                   # v8 indeks (sumber, tanggal) untuk daftar partai;
-                  # v9 latihan_jawaban
+                  # v9 latihan_jawaban; v10 pemain.jenis (mesin/konsultasi);
+                  # v11 CHECK akun_pribadi untuk database hasil migrasi (trigger);
+                  # v12 indeks penutup (sumber, hasil, jumlah_langkah) halaman Mesin
 
 
 SKEMA = """
@@ -60,6 +76,16 @@ CREATE TABLE IF NOT EXISTS pemain (
     -- Diisi impor_pgn.py, dipakai halaman latihan/ringkasan/profil supaya
     -- tidak perlu menebak dari keragaman lawan (permintaan frontend #7).
     akun_pribadi  INTEGER NOT NULL DEFAULT 0 CHECK (akun_pribadi IN (0, 1)),
+
+    -- NULL = satu manusia. 'mesin' = program catur (Comp Deep Blue, DEEP
+    -- FRITZ, HYDRA), 'konsultasi' = dua pemain atau lebih yang ditulis jadi
+    -- satu nama (Nikitin/Sakarov, 'Anand,V / FRITZ7'). Keduanya ikut masuk
+    -- dari koleksi PGN Mentor dan terhitung sebagai partai GM, padahal
+    -- CLAUDE.md bagian 11 memfokuskan data GM pada turnamen OTB dan
+    -- broadcast antar-manusia. Ditandai, bukan dihapus: Kasparov melawan
+    -- Deep Blue 1997 tetap data yang tidak bisa dibuat ulang. Pengisinya
+    -- app/jenis_pemain.py; CHECK memastikan nilai lain tidak pernah masuk.
+    jenis         TEXT    CHECK (jenis IS NULL OR jenis IN ('mesin', 'konsultasi')),
 
     dibuat_pada   TEXT    NOT NULL
 );
@@ -137,6 +163,10 @@ CREATE INDEX IF NOT EXISTS idx_partai_tanggal  ON partai(tanggal);
 -- (Saringan "gm" memakai IN tiga nilai dan masih ~0,6 detik: SQLite tidak
 -- bisa menggabungkan tiga rentang indeks sambil menjaga urutan.)
 CREATE INDEX IF NOT EXISTS idx_partai_sumber_tanggal ON partai(sumber, tanggal DESC, id DESC);
+-- v12: semua kolom yang dihitung halaman Mesin (jumlah per sumber, yang bisa
+-- dipilih & belum dianalisis) — baris partai memuat PGN, memindainya = membaca
+-- gigabyte hanya untuk menghitung.
+CREATE INDEX IF NOT EXISTS idx_partai_bisa_dipilih ON partai(sumber, hasil, jumlah_langkah);
 
 
 -- ================================================================ PHASE 2
@@ -342,8 +372,10 @@ def _tambah_kolom_jika_belum(conn: sqlite3.Connection, tabel: str, kolom: str,
 # Kolom yang ditambahkan setelah tabelnya sudah beredar. Definisi di sini harus
 # sama maknanya dengan yang ada di SKEMA (untuk database baru).
 KOLOM_MIGRASI = (
-    ("pemain", "akun_pribadi", "INTEGER NOT NULL DEFAULT 0"),
+    ("pemain", "akun_pribadi", "INTEGER NOT NULL DEFAULT 0 CHECK (akun_pribadi IN (0, 1))"),
     ("partai", "format", "TEXT"),
+    ("pemain", "jenis",
+     "TEXT CHECK (jenis IS NULL OR jenis IN ('mesin', 'konsultasi'))"),
 )
 
 
@@ -360,6 +392,17 @@ def buat_skema(conn: sqlite3.Connection) -> None:
     # v8: idx_partai_sumber lama hanya berisi kolom sumber, jadi termuat penuh
     # di awalan idx_partai_sumber_tanggal.
     conn.execute("DROP INDEX IF EXISTS idx_partai_sumber")
+    # v11: kolom akun_pribadi yang ditambahkan lewat ALTER TABLE sebelum v11
+    # tidak punya CHECK (0/1) — database asli termasuk (audit 28 Sep 2026:
+    # nilai 5 diterima). SQLite tidak bisa menambah CHECK ke kolom yang sudah
+    # ada tanpa membangun ulang tabel, jadi aturannya ditegakkan trigger:
+    # tetap database yang menolak, bukan kode yang berjanji.
+    for kapan in ("INSERT", "UPDATE OF akun_pribadi"):
+        nama = "cek_akun_pribadi_" + kapan.split()[0].lower()
+        conn.execute(
+            f"CREATE TRIGGER IF NOT EXISTS {nama} BEFORE {kapan} ON pemain "
+            "WHEN NEW.akun_pribadi NOT IN (0, 1) "
+            "BEGIN SELECT RAISE(ABORT, 'CHECK constraint failed: akun_pribadi'); END")
     conn.execute(f"PRAGMA user_version = {VERSI_SKEMA}")
     conn.commit()
 

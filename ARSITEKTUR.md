@@ -106,6 +106,24 @@ dinormalisasi, dan tandai bahwa identitasnya belum terverifikasi.
 baca, dan gelar, jadi `carlsen magnus` ≠ `carlsen m` (dicatat sebagai tes di
 `tests/test_impor.py`).
 
+*Batas yang diketahui (gelar & negara, diukur 25 Sep 2026):* kolom `gelar`
+hanya bisa diisi untuk pemain yang punya `fide_id`, karena satu-satunya sumber
+gelar yang tidak mengarang adalah FIDE (`rapikan_nama.py`). FIDE ID hanya
+datang dari TWIC dan broadcast Lichess; PGN Mentor dan akun online tidak
+membawanya, dan PGN yang tersimpan juga tidak memuat tag `WhiteTitle` (0 dari
+272.960 partai). Setelah `rapikan_nama.py --semua --jalan` (1.579 permintaan
+ke FIDE): 3.231 pemain ber-FIDE-ID (16%), **2.559 di antaranya bergelar (79%;
+sisanya memang tidak bergelar menurut FIDE)**, negara 1.760 → 3.216. Secara
+keseluruhan gelar terisi 13% — dan angka itu **langit-langitnya**, bukan
+kelalaian: 84% pemain tidak punya ID di sumber mana pun. Akibat untuk aturan
+produk: saringan "lawan bergelar" (CLAUDE.md bagian 11) dan "gelar WGM" pada
+impor broadcast hanya menyala untuk pemain TWIC/broadcast. Dua jalan yang
+menaikkannya tanpa mengarang: penggabungan pemain kembar (baris pgnmentor
+melebur ke baris TWIC yang ber-FIDE-ID), dan untuk lawan akun online, gelar
+dari profil akun lewat API Lichess/Chess.com (`app/gelar_akun.py`, 25 Sep
+2026 — hanya gelar FIDE, `LM`/`BOT` dibuang). Pencarian *nama* ke FIDE
+sengaja tidak dipakai: dua orang bisa senama, dan itu menebak.
+
 *Diperbaiki 12 Sep 2026 (B13):* nama yang depannya disingkat kini dicocokkan
 satu lapis di atas normalisasi, di `dapatkan_atau_buat_pemain()`. `Aronian,L`
 menemukan `Aronian, Levon` kalau — dan hanya kalau — kedua nama berkoma
@@ -934,6 +952,22 @@ lebih cepat. Kalau nanti terasa lambat, langkah berikutnya adalah tabel
 ringkasan per (fen_kunci, langkah) yang dihitung saat indeks dibangun;
 belum dilakukan karena belum perlu.
 
+**Diperbarui 27 Sep 2026: cache, bukan tabel ringkasan.** Dengan 273 ribu
+partai, posisi awal GM kini 259 ribu baris: 1-3 detik di mesin tenang, 11
+detik lewat server saat batch engine jalan. `repertoire/pgn` menanyakan
+puluhan posisi awal (118 panggilan, 4,5-8,7 detik). Dipilih cache di memori
+server (`cari_langkah` di `app/posisi.py`), bukan tabel ringkasan: tabel
+harus dijaga ikut berubah di setiap impor, gabung pemain, dan penandaan
+pemain mesin — lebih banyak tempat untuk salah daripada yang dihemat.
+Ketentuannya (disetujui Ray): hanya hasil >= 1.000 partai yang disimpan;
+kuncinya memuat `MAX(partai.id)` sehingga impor dari terminal langsung
+terlihat; impor web mengosongkannya; selebihnya kedaluwarsa 10 menit.
+**Batas yang diterima:** gabung pemain, hasil siaran yang diperbarui, dan
+penandaan pemain mesin dari terminal bisa tertinggal sampai 10 menit
+(dicatat oleh tes `UjiCacheLangkah.test_hasil_diubah_basi_sampai_dikosongkan`).
+Terukur: posisi awal GM 3,70 → 0,00 detik (kedua kali), repertoire 8,68 → 1,93.
+Pembukaan pertama sesudah server menyala tetap lambat.
+
 **Default `sumber=gm`.** Partai online Ray sendiri (10 ribu lebih) tidak
 ikut kecuali diminta, supaya "apa yang dimainkan GM" tidak tercampur bullet.
 Saat indeks baru sebagian (3.000 partai pertama = partai Ray), penjelajah
@@ -1022,18 +1056,24 @@ posisi hasil susun ke database, memicu analisis partai penuh dari tombol web
 
 ## Phase 6 — Tanya Database dengan Bahasa Indonesia
 
-Status: **modul inti selesai 12 Sep 2026, belum tersambung ke server.**
+Status: **selesai dan tersambung 25 Sep 2026.** Modul intinya sudah jadi sejak
+12 Sep, tapi endpoint dan halamannya baru dibuat 25 Sep — 13 hari fitur utuh
+berikut 48 tesnya tidak bisa dipakai Ray sama sekali, karena tidak ada satu pun
+tautan ke arahnya. `tests/test_tanya_web.py` sekarang menjaga hal itu: satu tes
+gagal kalau ada halaman bernav yang tidak menaut ke `/tanya`.
 Permintaan Ray: *"tolong bantu latih ollama di komputer ini supaya ahli catur
 dan supaya saya bisa memasukan AI di program ini"* — arah yang dipilih Ray
 setelah diberi empat pilihan: **chatbot tanya-jawab database**.
 
 | | |
 |---|---|
-| Berkas baru | `app/tanya_db.py`, `tests/test_tanya_db.py` |
-| Tes | 25 tes baru; seluruh suite **243 tes lolos** |
+| Berkas baru | `app/tanya_db.py`, `app/tanya_web.py`, `web/tanya.html`, `web/tanya.js`, `tests/test_tanya_db.py`, `tests/test_tanya_web.py` |
+| Tes | 25 tes `tanya_db` + 14 `peta_aplikasi` + **17 `tanya_web`** (jalur HTTP, Ollama ditambal); seluruh suite **547 tes lolos** (3 dilewati) |
 | Dependency baru | **tidak ada** — Ollama diakses lewat REST API-nya pakai `urllib` bawaan |
-| Model | `qwen2.5-coder:3b` (1,9 GB), diunduh 12 Sep |
-| Belum ada | endpoint di `app/main.py`, halaman di `web/` |
+| Model | `qwen2.5-coder:7b` (4,7 GB) — lihat "Pilihan model"; 3b sempat dipakai lalu ditinggalkan karena 2 dari 7 SQL-nya gagal |
+| Endpoint | `GET /api/tanya/status` (Ollama hidup? model apa?), `POST /api/tanya` `{pertanyaan, mode, model?}`; 503 kalau Ollama mati, 422 kalau SQL ditolak |
+| Halaman | `/tanya`, tertaut dari nav 16 halaman |
+| Bukti HTTP nyata (25 Sep) | `/api/tanya/status` 200 `siap:true`; "berapa partai per sumber" dengan `qwen2.5-coder:3b` → **23,6 detik**, SQL `SELECT sumber, COUNT(*) ... GROUP BY sumber`, hasil twic 164.836 / pgnmentor 89.822 / lichess-user 10.702 / lichess-broadcast 6.092 / chesscom 1.508; mode `aplikasi` mengembalikan peta yang dipakai; pertanyaan kosong dan mode asing → 422 |
 
 ### Kenapa LLM tidak boleh jadi sumber kebenaran
 
@@ -1240,11 +1280,35 @@ karena membuat semua peringatan lain ikut diabaikan.
   analisis engine. Aturan "maksimal dua proses engine" di mesin ini tetap
   berlaku, dan LLM ikut menghitung.
 
-### Belum tersambung
+### Penyambungan
 
-Endpoint `POST /api/tanya` di `app/main.py` dan halaman `web/tanya.html`
-**belum dibuat**, karena pada 12 Sep 21:2x tiga sesi lain sedang aktif menulis
-`app/main.py` (router `impor_web`, `analisa_web`) dan seluruh nav 13 halaman
-`web/`. Aturan 4 di `SESI.md` melarang menyentuh berkas yang sedang dikerjakan
-sesi lain. Modul inti sengaja dibuat mandiri supaya penyambungannya nanti
-cuma beberapa baris.
+Endpoint `/api/tanya` (`app/tanya_web.py`) dan halaman `/tanya` (`web/tanya.html`)
+tersambung 25 Sep 2026 (commit `02275fe`), 13 hari setelah modul intinya.
+Sempat tertunda karena pada 12 Sep tiga sesi lain sedang menulis `app/main.py`
+dan nav `web/`; modul inti yang mandiri membuat penyambungannya memang cuma
+beberapa baris.
+
+---
+
+## Catatan lintas fase: siapa yang boleh menyuruh server (27 Sep 2026)
+
+Server mendengar di laptop Ray dan, untuk pembantu, di WiFi/tunnel. Ada dua
+middleware di `app/main.py`, logikanya di modul sendiri supaya bisa diuji:
+
+| Lapis | Modul | Yang ditolak |
+|---|---|---|
+| perangkat lain | `app/pembantu.py` (`boleh_dari_luar`) | alamat bukan lokal / lewat proxy, kecuali jalur pembantu |
+| asal permintaan | `app/penjaga_asal.py` (`asal_diizinkan`) | Host yang bukan laptop ini (DNS rebinding); POST/PUT/DELETE yang `Origin`-nya bukan halaman ini |
+
+Lapis kedua ditambahkan setelah audit 27 Sep: sebelumnya situs apa pun yang
+dibuka di browser laptop bisa mengirim POST ke `127.0.0.1:8000` (impor, jeda
+mesin, hapus posisi) karena permintaan itu memang datang dari 127.0.0.1.
+**Batas yang diterima:** permintaan tanpa `Origin` (python/curl dari terminal)
+tetap dilayani — browser selalu menyertakannya untuk POST lintas situs, jadi
+penyerang lewat browser tidak bisa memakai celah itu. Jalur pembantu
+dikecualikan dari lapis kedua; jalur itu dijaga kode 6 angka, ditambah dua
+perbaikan di hari yang sama: `/api/pembantu/kirim` hanya menerima partai yang
+dipinjamkan ke perangkat itu (atau, kalau sewanya kedaluwarsa, partai yang
+masih perlu dianalisis — hasil yang ada tidak pernah tertimpa), dan alamat
+untuk batas tebakan kode hanya mempercayai `CF-Connecting-IP` dari koneksi
+lokal (cloudflared), bukan `X-Forwarded-For`/`X-Real-IP` kiriman pengirim.

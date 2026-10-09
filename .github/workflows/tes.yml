@@ -1,20 +1,66 @@
+# Menjalankan seluruh tes tiap push dan pull request.
+#
+# Kenapa windows-latest, bukan ubuntu: aplikasi ini memang Windows —
+# pemindaian proses (PowerShell), taskkill, affinity CPU, dan pembekuan
+# Stockfish semuanya berkode khusus Windows dan tesnya menyesuaikan diri
+# lewat skipUnless. Dijalankan di Linux, yang terlewat justru bagian yang
+# paling sering rusak.
+#
+# CATUR_UJI_HEADLESS=1 disetel DI SINI (audit 25 Sep 2026): tes halaman
+# butuh peramban dan ±20 detik, jadi di laptop Ray sengaja dilewati, tapi
+# di CI tidak ada alasan melewatinya. Windows runner sudah punya Edge.
 name: tes
 
 on:
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   tes:
-    # Windows, bukan Linux: kunci penulis dan antrean analisis memakai msvcrt.
     runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CATUR_UJI_HEADLESS: "1"
+      PYTHONUTF8: "1"
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Pasang dependency (versi sama dengan mesin pengembangan)
-        run: python -m pip install chess==1.11.2 fastapi==0.141.1 "uvicorn[standard]==0.52.4"
+          cache: pip
+
+      - name: Pasang kebutuhan
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Pastikan peramban ada
+        # Tes headless MELEWATI dirinya sendiri kalau peramban tidak ketemu.
+        # Di CI itu berbahaya: hijau tanpa benar-benar menguji. Jadi keberadaan
+        # peramban diperiksa lebih dulu, dan tidak adanya peramban = gagal.
+        shell: pwsh
+        run: |
+          $p = @(
+            "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $p) { throw "Tidak ada Edge di runner; tes headless akan terlewat diam-diam." }
+          "CATUR_BROWSER=$p" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $p --version
+
       - name: Jalankan tes
         run: python -m unittest discover -s tests -v
+
+      - name: Pastikan tes headless benar-benar jalan
+        # Penjaga terhadap kegagalan diam: kalau tes headless kembali di-skip,
+        # langkah ini gagal walau suite di atas hijau. Jumlah yang diharapkan
+        # dihitung dari berkas tesnya, bukan ditulis mati: angka "3" yang dulu
+        # di sini memerahkan CI sejak 25 Sep begitu tesnya jadi 5.
+        shell: pwsh
+        run: |
+          $harus = (Select-String -Path tests/test_halaman_headless.py -Pattern '^\s+def test').Count
+          $keluaran = python -m unittest tests.test_halaman_headless -v 2>&1 | Out-String
+          $keluaran
+          if ($keluaran -match "skipped") { throw "Tes headless dilewati, padahal CI harus menjalankannya." }
+          if ($keluaran -notmatch "Ran $harus tests") { throw "Tes headless tidak lengkap (harusnya $harus)." }

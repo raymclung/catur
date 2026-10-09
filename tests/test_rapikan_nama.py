@@ -77,3 +77,46 @@ class Putuskan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NamaResmiFide(unittest.TestCase):
+    """
+    Pilihan `--nama-resmi` (`abaikan_beda_belakang`).
+
+    Pengaman "nama belakang berbeda" ada karena FIDE ID di PGN bisa keliru, dan
+    nama belakang yang tidak cocok adalah tanda paling murah untuk itu. Tapi ia
+    juga menolak tiga hal yang sah: ejaan alih aksara ('Karjakin' vs 'Karyakin'),
+    urutan nama yang dibalik sumber, dan baris yang namanya masih username.
+    Untuk kasus itu identitasnya sudah dipastikan lewat FIDE ID, jadi
+    pengamannya boleh dilepas — dengan sengaja, lewat pilihan, bukan diam-diam.
+    """
+
+    def test_beda_nama_belakang_ditolak_tanpa_pilihan(self):
+        baru, alasan = putuskan("Karjakin, Sergey", {"name": "Karyakin, Sergey"})
+        self.assertIsNone(baru)
+        self.assertIn("nama belakang berbeda", alasan)
+
+    def test_beda_nama_belakang_diterima_dengan_pilihan(self):
+        baru, alasan = putuskan("Karjakin, Sergey", {"name": "Karyakin, Sergey"},
+                                abaikan_beda_belakang=True)
+        self.assertEqual(baru, "Karyakin, Sergey")
+        self.assertIsNone(alasan)
+
+    def test_username_dapat_nama_resmi(self):
+        baru, _ = putuskan("McLung_07", {"name": "Lung, Ray Mc"},
+                           abaikan_beda_belakang=True)
+        self.assertEqual(baru, "Lung, Ray Mc")
+
+    def test_pilihan_tidak_melewati_pemeriksaan_bentrok(self):
+        """Melepas satu pengaman tidak boleh melepas yang lain."""
+        baru, alasan = putuskan("Karjakin, Sergey", {"name": "Karyakin, Sergey"},
+                                cari_bentrok=lambda n: "id 99",
+                                abaikan_beda_belakang=True)
+        self.assertIsNone(baru)
+        self.assertIn("bentrok", alasan)
+
+    def test_nama_sama_tetap_bukan_perubahan(self):
+        baru, alasan = putuskan("Carlsen, Magnus", {"name": "Carlsen, Magnus"},
+                                abaikan_beda_belakang=True)
+        self.assertIsNone(baru)
+        self.assertEqual(alasan, "sudah sama")

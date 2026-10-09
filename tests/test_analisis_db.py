@@ -188,3 +188,33 @@ class UjiAnalisisDb(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UjiStatistikTersimpan(unittest.TestCase):
+    """Jumlah langkah disimpan (29 Sep 2026), tapi harus ikut berubah begitu
+    analisis ditambah atau dihapus."""
+
+    def test_ikut_berubah_saat_analisis_berubah(self):
+        import tempfile
+        from pathlib import Path
+        from app.analisis_db import hapus_analisis, statistik_analisis
+        from app.db import buat_skema, koneksi, sekarang
+        with tempfile.TemporaryDirectory() as tmp:
+            c = koneksi(Path(tmp) / "u.db")
+            buat_skema(c)
+            t = sekarang()
+            c.execute("INSERT INTO pemain(id,nama,nama_normal,dibuat_pada) VALUES(1,'A','a',?)", (t,))
+            c.execute("INSERT INTO partai(id,putih_id,hitam_id,hasil,pgn,sumber,hash_unik,diimpor_pada) "
+                      "VALUES(10,1,1,'1-0','x','uji','h',?)", (t,))
+            self.assertEqual(statistik_analisis(c)["langkah_dianalisis"], 0)
+            c.execute("INSERT INTO analisis(partai_id,engine,profil,depth,dianalisis_pada) "
+                      "VALUES(10,'uji','cepat',10,?)", (t,))
+            for ply in range(3):
+                c.execute("INSERT INTO analisis_langkah(partai_id,ply,nomor_langkah,warna,san,uci,"
+                          "eval_sebelum_cp,eval_sesudah_cp,eval_putih_cp,kehilangan_cp,klasifikasi) "
+                          "VALUES(10,?,1,'putih','e4','e2e4',0,0,0,0,'baik')", (ply,))
+            c.commit()
+            self.assertEqual(statistik_analisis(c)["langkah_dianalisis"], 3)
+            hapus_analisis(c, 10)
+            self.assertEqual(statistik_analisis(c)["langkah_dianalisis"], 0)
+            c.close()

@@ -1,6 +1,8 @@
 """Saringan pemilihan partai di analisis_partai.py (--hasil, --format, akun pribadi)."""
 
 import argparse
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -25,7 +27,8 @@ def pgn(putih, hitam, hasil, tc="180+0", langkah="1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 
 def args(**ubah):
     dasar = dict(id=None, sumber=None, format_=None, pemain=None, min_elo=None,
                  gelar_lawan=None, lawan_min_elo=None, hasil=None, ulang=False,
-                 min_langkah=1, terbaru=None, rentang_eco=None, repertoire=False)
+                 min_langkah=1, terbaru=None, rentang_eco=None, repertoire=False,
+                 dangkal=False)
     dasar.update(ubah)
     return Namespace(**dasar)
 
@@ -50,6 +53,15 @@ class UjiPilihPartai(unittest.TestCase):
 
     def hasil_id(self, **ubah):
         return {p["id"] for p in pilih_partai(self.conn, args(**ubah))}
+
+    def test_terlama_mulai_dari_ujung_lain(self):
+        """Dua batch kembar dari dua ujung tidak memilih partai yang sama."""
+        semua = [p["id"] for p in pilih_partai(self.conn, args())]
+        baru = [p["id"] for p in pilih_partai(self.conn, args(terbaru=3))]
+        lama = [p["id"] for p in pilih_partai(self.conn, args(terbaru=3, terlama=True))]
+        self.assertEqual(baru, semua[:3])
+        self.assertEqual(lama, list(reversed(semua))[:3])
+        self.assertEqual(set(baru) & set(lama), set())
 
     def test_akun_pribadi_jadi_sumber_kebenaran(self):
         self.assertEqual(nama_normal_saya(self.conn), ["rayylung"])
@@ -107,8 +119,11 @@ class UjiSaringanEco(unittest.TestCase):
 
     def test_kode_salah_dihentikan(self):
         p = argparse.ArgumentParser()
-        with self.assertRaises(SystemExit):        # argparse.error -> SystemExit
-            _rentang_eco(["ZZ9"], p)
+        # argparse menulis pesannya ke stderr; dibungkam supaya keluaran tes
+        # bersih dan kegagalan sungguhan tidak tenggelam (audit 21 Sep 2026)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):    # argparse.error -> SystemExit
+                _rentang_eco(["ZZ9"], p)
 
     def test_saring_satu_rentang(self):
         n = len(pilih_partai(self.conn, args(rentang_eco=[("A10", "A39")])))
@@ -169,5 +184,92 @@ class UjiProfilLengkap(unittest.TestCase):
         self.assertEqual(set(PROFIL), set(DETIK_PER_PLY_CADANGAN))
 
 
+class UjiDangkal(unittest.TestCase):
+    """--dangkal: hanya partai yang analisisnya masih kasar (cepat/lichess)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = koneksi(Path(self.tmp.name) / "uji.db")
+        buat_skema(self.conn)
+        for i, (p_, h) in enumerate([("rayylung", "a"), ("rayylung", "b"),
+                                     ("rayylung", "c"), ("rayylung", "d")]):
+            impor_teks(self.conn, pgn(p_, h, "1-0", langkah=f"1. e4 e5 2. Nf3 Nc6 3. Bb5 a{6 - i % 2}"),
+                       "chesscom")
+        tandai_akun_pribadi(self.conn, ["rayylung"])
+        self.id = [r[0] for r in self.conn.execute("SELECT id FROM partai ORDER BY id")]
+        for pid, profil in zip(self.id, ("cepat", "hemat", "lichess")):
+            self.conn.execute(
+                "INSERT INTO analisis(partai_id,engine,profil,depth,dianalisis_pada) "
+                "VALUES(?,'uji',?,10,'2026-01-01')", (pid, profil))
+        self.conn.commit()          # partai keempat sengaja belum dianalisis
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def pilih(self, **ubah):
+        return {p["id"] for p in pilih_partai(self.conn, args(**ubah))}
+
+    def test_hanya_profil_kasar(self):
+        self.assertEqual(self.pilih(dangkal=True), {self.id[0], self.id[2]},
+                         "hemat sudah dalam, yang belum dianalisis bukan urusan --dangkal")
+
+    def test_tanpa_dangkal_hanya_yang_belum_dianalisis(self):
+        self.assertEqual(self.pilih(), {self.id[3]})
+
+    def test_ulang_mengambil_semuanya(self):
+        self.assertEqual(self.pilih(ulang=True), set(self.id))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class PartaiBelumSelesai(unittest.TestCase):
+    """
+    Partai dengan hasil '*' tidak boleh memakan waktu engine.
+
+    Ditemukan 25 Sep 2026: broadcast yang tertangkap saat siaran masih berjalan
+    tersimpan dengan hasil '*'. Partai itu akan masuk lagi dengan hasil lengkap,
+    dan dedup di `app/impor.py` membuang yang '*' — analisisnya ikut terhapus
+    lewat ON DELETE CASCADE, jadi waktu engine-nya hangus. Selain itu laporan
+    "sebab kalah" tidak berarti apa-apa pada partai yang belum punya hasil.
+    """
+
+    def setUp(self):
+        # Database sendiri, bukan warisan UjiPilihPartai: kelas itu sudah
+        # mengisi enam partai akun Ray, dan tes ini menghitung isi seluruh
+        # hasil pemilihan.
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = koneksi(Path(self.tmp.name) / "uji.db")
+        buat_skema(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def masukkan(self):
+        impor_teks(self.conn, pgn("A, Satu", "B, Dua", "1-0"), "lichess-broadcast")
+        impor_teks(self.conn, pgn("C, Tiga", "D, Empat", "*"), "lichess-broadcast")
+        self.conn.commit()
+
+    def id_hasil(self, **ubah):
+        return {r["id"]: r["hasil"] for r in pilih_partai(self.conn, args(**ubah))}
+
+    def test_partai_bintang_tidak_ikut_terpilih(self):
+        self.masukkan()
+        self.assertEqual(sorted(self.id_hasil().values()), ["1-0"])
+
+    def test_bisa_dipaksa_lewat_id(self):
+        """Kalau Ray menyebut id-nya sendiri, itu permintaan yang disengaja."""
+        self.masukkan()
+        bintang = self.conn.execute(
+            "SELECT id FROM partai WHERE hasil = '*'").fetchone()["id"]
+        self.assertEqual(list(self.id_hasil(id=[bintang])), [bintang])
+
+    def test_saringan_hasil_lain_tidak_berubah(self):
+        """Penambahan ini tidak boleh menyenggol partai yang sudah selesai."""
+        self.masukkan()
+        impor_teks(self.conn, pgn("E, Lima", "F, Enam", "1/2-1/2"), "twic")
+        self.conn.commit()
+        self.assertEqual(sorted(self.id_hasil().values()), ["1-0", "1/2-1/2"])

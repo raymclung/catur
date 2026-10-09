@@ -25,7 +25,8 @@
     ikhtisar: document.getElementById("ikhtisar"),
     kartuTindakan: document.getElementById("kartu-tindakan"),
     tindakan: document.getElementById("tindakan"),
-    baris: document.getElementById("baris")
+    baris: document.getElementById("baris"),
+    unduh: document.getElementById("unduh-pgn")
   };
 
   var akunSemua = [];
@@ -275,7 +276,7 @@
 
   var q = new URLSearchParams(window.location.search);
   ["warna", "kedalaman", "cabang", "minimal"].forEach(function (k) {
-    if (q.get(k) && el[k].querySelector('option[value="' + q.get(k) + '"]')) el[k].value = q.get(k);
+    if (q.get(k) && el[k].querySelector('option[value="' + CSS.escape(q.get(k)) + '"]')) el[k].value = q.get(k);
   });
 
   AkunPribadi.muat().then(function (akun) {
@@ -286,10 +287,51 @@
     akun.forEach(function (p) {
       var o = document.createElement("option"); o.value = p.id; o.textContent = p.nama + (p.sumber ? " · " + p.sumber : ""); el.akun.appendChild(o);
     });
-    if (q.get("akun") && el.akun.querySelector('option[value="' + q.get("akun") + '"]')) el.akun.value = q.get("akun");
+    if (q.get("akun") && el.akun.querySelector('option[value="' + CSS.escape(q.get("akun")) + '"]')) el.akun.value = q.get("akun");
     if (!akun.length) throw new Error("Tidak ada akun pribadi di database.");
     telusuri();
   }).catch(function (e) { galat(e.message); });
 
   [el.akun, el.warna, el.kedalaman, el.cabang, el.minimal].forEach(function (s) { s.addEventListener("change", telusuri); });
+
+  /* ---------- unduh PGN (A41) ----------
+     Server yang menyusun pohonnya (app/repertoire_pgn.py), bukan halaman ini:
+     garis di tabel atas dibangun dari puluhan permintaan /api/posisi, dan
+     menyusunnya ulang di browser hanya akan menghasilkan dua sumber kebenaran.
+     Butuh belasan detik, jadi tombolnya dikunci selama menunggu. */
+  if (el.unduh) {
+    el.unduh.addEventListener("click", function () {
+      var dipilih = el.akun.value === "semua" ? akunSemua
+        : akunSemua.filter(function (a) { return String(a.id) === el.akun.value; });
+      if (!dipilih.length) { galat("Pilih akun dulu."); return; }
+      var nama = el.akun.value === "semua" ? (akunSemua[0] ? akunSemua[0].nama : "Saya")
+        : dipilih[0].nama;
+      var p = dipilih.map(function (a) { return "pemain_id=" + a.id; });
+      p.push("warna=" + el.warna.value, "kedalaman=" + el.kedalaman.value,
+             "cabang=" + el.cabang.value, "minimal=" + el.minimal.value,
+             "nama=" + encodeURIComponent(nama));
+      var url = "/api/repertoire/pgn?" + p.join("&");
+      var semula = el.unduh.textContent;
+      el.unduh.disabled = true;
+      el.unduh.textContent = "Menyiapkan…";
+      el.galat.hidden = true;
+      fetch(url).then(function (r) {
+        if (!r.ok) throw new Error("Server menjawab " + r.status);
+        return r.blob();
+      }).then(function (b) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(b);
+        a.download = "repertoire-" + nama + "-" + el.warna.value + ".pgn";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+      }).catch(function (e) {
+        galat("Gagal menyiapkan PGN: " + e.message);
+      }).then(function () {
+        el.unduh.disabled = false;
+        el.unduh.textContent = semula;
+      });
+    });
+  }
 })();

@@ -6,7 +6,8 @@ Urutan tahap (masing-masing bisa dilewati dengan --hanya):
   2. twic       edisi TWIC yang belum tercatat di sumber_impor, dari edisi
                 terakhir + 1 sampai perkiraan edisi terbaru (terbit tiap Senin);
                 edisi yang belum terbit (404) menghentikan tahap ini tanpa error
-  3. broadcast  impor_broadcast.py --resmi --tier N (turnamen resmi Lichess)
+  3. broadcast  impor_broadcast.py --resmi --tier N --hari 10 --min-elo-bintang 2400:
+                turnamen resmi Lichess 10 hari terakhir, hanya partai pemain terkenal
   4. indeks     indeks_posisi.py untuk partai baru (partai lama dilewati sendiri)
 
 Saringan TWIC sama untuk backfill maupun mingguan: kedua pemain Elo >= 2500,
@@ -34,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import sqlite3
 import subprocess
 import sys
 import time
@@ -43,18 +45,24 @@ from pathlib import Path
 
 import chess.pgn
 
-from app.db import PATH_DB, buat_skema, info, koneksi
-from app.impor import impor_satu, ke_int, perbarui_elo_terakhir
-from app.kunci_penulis import KunciPenulis, KunciTerpakai, lingkungan_anak
+from app.db import FOLDER_DATA, PATH_DB, VERSI_SKEMA, buat_skema, info, koneksi, versi_skema
+from app.impor import impor_satu, ke_elo, perbarui_elo_terakhir
+from app.kunci_penulis import KunciPenulis, KunciTerpakai, jalankan_anak, lingkungan_anak
 from app.sumber_impor import catat, sudah_selesai
-from cadangkan_db import cadangkan
+from cadangkan_db import (FOLDER_BACKUP, FOLDER_CLOUD, SISAKAN_GB_DEFAULT, buang_inti_lama,
+                          cadangkan, ekspor_inti, salin_ke_cloud)
 from impor_twic import URL_EDISI, baca_pgn, online, rentang, unduh
 
 AKAR = Path(__file__).resolve().parent
-FOLDER_LAPORAN = AKAR / "data" / "laporan"
-TAHAP = ("cadangan", "twic", "broadcast", "indeks")
+FOLDER_LAPORAN = FOLDER_DATA / "laporan"
+TAHAP = ("cadangan", "inti", "twic", "broadcast", "indeks")
 MIN_ELO_DEFAULT = 2500
-TIER_DEFAULT = 5
+TIER_DEFAULT = 4
+# Broadcast: hanya partai pemain kuat (impor_broadcast.py, saringan bintang:
+# salah satu pemain Elo >= MIN_ELO_BINTANG, atau bergelar GM/WGM),
+# dari turnamen yang masih berlangsung dalam HARI_BROADCAST hari terakhir.
+MIN_ELO_BINTANG = 2400   # Ray 25 Sep 2026, opsi F; lihat impor_broadcast.py
+HARI_BROADCAST = 10
 
 # TWIC terbit tiap Senin; jangkar untuk menghitung nomor edisi dari tanggal.
 EDISI_JANGKAR = 1661
@@ -79,7 +87,7 @@ def lolos_mingguan(h, min_elo: int) -> bool:
     if online(h):
         return False
     for kunci in ("WhiteElo", "BlackElo"):
-        elo = ke_int(h.get(kunci))
+        elo = ke_elo(h.get(kunci))
         if elo is None or elo < min_elo:
             return False
     return True
@@ -115,12 +123,55 @@ class Log:
             self.fh.close()
 
 
+def siapkan_skema(conn, coba: bool) -> bool:
+    """
+    Migrasi skema hanya kalau bukan --coba; dalam mode coba cuma memeriksa.
+
+    `buat_skema()` selalu menulis `PRAGMA user_version` walau tidak ada yang
+    berubah, jadi --coba ikut menulis dan kena "database is locked" saat
+    penulis lain sedang bekerja (25 Sep 2026). Mode coba harus hanya-baca:
+    kalau skemanya tertinggal, kembalikan False supaya pemanggil berhenti
+    dengan pesan, bukan diam-diam bermigrasi.
+    """
+    if not coba:
+        buat_skema(conn)
+        return True
+    return versi_skema(conn) == VERSI_SKEMA
+
+
 def tahap_cadangan(db: Path, coba: bool, log: Log) -> None:
     if coba:
         log("  dilewati (--coba)")
         return
-    tujuan = cadangkan(db)
+    # Penjaga sisa ruang drive yang sama dengan CLI. Dulu fungsi dipanggil
+    # dengan bawaannya (0 GB = mati), jadi justru jalur mingguan — yang paling
+    # sering jalan — tidak pernah menjaga disk (audit 28 Sep 2026).
+    tujuan = cadangkan(db, sisakan_gb=SISAKAN_GB_DEFAULT)
     log(f"  {tujuan.name}  {tujuan.stat().st_size / 1048576:.1f} MB, integrity ok")
+
+
+def tahap_inti(db: Path, coba: bool, log: Log) -> None:
+    """
+    Ekspor inti (yang tidak bisa dibuat ulang) lalu salin ke folder OneDrive.
+
+    Cadangan penuh tinggal di D: bersama databasenya (keputusan Ray 25 Sep,
+    SESI bagian 6); inilah satu-satunya salinan yang selamat kalau drive itu
+    rusak, jadi ia ikut jadwal mingguan, bukan dijalankan sekali lalu basi.
+    """
+    if coba:
+        log("  dilewati (--coba)")
+        return
+    gz = ekspor_inti(db)
+    log(f"  {gz.name}  {gz.stat().st_size / 1048576:.1f} MB")
+    # Salinan lokalnya juga dirotasi; dulu hanya folder cloud, jadi
+    # data/backup/catur-inti-*.db.gz menumpuk tiap pekan (audit 28 Sep 2026).
+    for b in buang_inti_lama(FOLDER_BACKUP):
+        log(f"  dibuang (lokal, lama): {b.name}")
+    if FOLDER_CLOUD is None:
+        log("  cloud: TIDAK disalin — variabel lingkungan OneDrive tidak ada di mesin ini")
+        return
+    di_cloud = salin_ke_cloud(gz, FOLDER_CLOUD)
+    log(f"  cloud: {di_cloud}  {di_cloud.stat().st_size / 1048576:.1f} MB")
 
 
 def tahap_twic(conn, min_elo: int, coba: bool, log: Log,
@@ -164,6 +215,9 @@ def tahap_twic(conn, min_elo: int, coba: bool, log: Log,
             if game is None:
                 break
             hitung["dibaca"] += 1
+            if game.errors:             # langkah ilegal -> partai terpotong, lihat app/impor.py
+                hitung["rusak"] += 1
+                continue
             if not lolos_mingguan(game.headers, min_elo):
                 continue
             hitung["lolos"] += 1
@@ -193,23 +247,45 @@ def jalankan(skrip: str, argumen: list[str], log: Log) -> int:
     log(f"  $ python {skrip} {' '.join(argumen)}")
     # lingkungan_anak(): skrip anak memakai kunci penulis yang dipegang proses
     # ini, bukan ditolak olehnya (tahap indeks dulu selalu GAGAL karena itu).
-    proses = subprocess.run(perintah, cwd=AKAR, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", env=lingkungan_anak())
+    # jalankan_anak: anak diikat ke umur proses ini, jadi mematikan perbarui.py
+    # (juga tanpa /T) ikut mematikan anaknya — tidak ada penulis tanpa kunci.
+    proses = jalankan_anak(perintah, cwd=AKAR, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True,
+                           encoding="utf-8", errors="replace", env=lingkungan_anak())
     for baris in (proses.stdout + proses.stderr).splitlines():
         if baris.strip():
             log("    " + baris)
     return proses.returncode
 
 
-def tahap_broadcast(tier: int, coba: bool, log: Log) -> int:
-    return jalankan("impor_broadcast.py", ["--resmi", "--tier", str(tier)] + (["--lihat-saja"] if coba else []), log)
+def tahap_broadcast(tier: int, coba: bool, log: Log, min_elo_bintang: int = MIN_ELO_BINTANG,
+                    hari: int = HARI_BROADCAST, db: Path = PATH_DB) -> int:
+    # --db WAJIB diteruskan: tanpa itu skrip anak menulis ke database bawaan,
+    # bukan yang diminta (audit 28 Sep 2026: `--db B` mengindeks ke A).
+    argumen = ["--resmi", "--tier", str(tier), "--hari", str(hari),
+               "--min-elo-bintang", str(min_elo_bintang), "--db", str(db)]
+    return jalankan("impor_broadcast.py", argumen + (["--lihat-saja"] if coba else []), log)
 
 
-def tahap_indeks(coba: bool, log: Log) -> int:
+def tahap_indeks(coba: bool, log: Log, db: Path = PATH_DB) -> int:
     if coba:
         log("  dilewati (--coba)")
         return 0
-    return jalankan("indeks_posisi.py", [], log)
+    return jalankan("indeks_posisi.py", ["--db", str(db)], log)
+
+
+def buka_baca_saja(db: Path) -> sqlite3.Connection:
+    """
+    Koneksi untuk --coba. `koneksi()` menjalankan PRAGMA journal_mode = WAL dan
+    membuat foldernya, jadi --coba dulu tetap MENGUBAH berkas database (mode
+    journal) dan membuat berkas kosong kalau path-nya salah (audit 28 Sep
+    2026). mode=ro menolak keduanya di tingkat SQLite.
+    """
+    if not Path(db).is_file():
+        raise FileNotFoundError(f"database tidak ada: {db}")
+    conn = sqlite3.connect(f"file:{Path(db).resolve().as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 # --------------------------------------------------------------------------
@@ -227,9 +303,23 @@ def main() -> int:
                    help="backfill arsip lama, mis. 920-1505 (tanpa ini: hanya edisi baru)")
     p.add_argument("--unduh-saja", action="store_true",
                    help="tahap TWIC hanya mengunduh zip ke data/twic/, tidak menulis database")
+    p.add_argument("--min-elo-bintang", type=int, default=MIN_ELO_BINTANG,
+                   help="broadcast: simpan partai kalau salah satu pemain Elo >= N atau bergelar GM (0 = semua)")
+    p.add_argument("--hari", type=int, default=HARI_BROADCAST,
+                   help="broadcast: turnamen yang masih berlangsung dalam N hari terakhir (0 = semua)")
     p.add_argument("--tier", type=int, default=TIER_DEFAULT, help=f"broadcast resmi tier >= N (default {TIER_DEFAULT})")
     p.add_argument("--db", type=Path, default=PATH_DB)
     args = p.parse_args()
+
+    # Kunci penulis, log, dan skrip anak mengikuti CATUR_DB (app/db.py
+    # FOLDER_DATA), bukan --db. --db yang berbeda berarti menulis database B
+    # sambil memegang kunci & log database A (audit 28 Sep 2026). Tolak dengan
+    # petunjuk, jangan setengah-setengah.
+    if Path(args.db).resolve() != Path(PATH_DB).resolve():
+        print(f"--db {args.db} berbeda dari database aktif ({PATH_DB}). Untuk database lain "
+              f"pakai: set CATUR_DB={args.db} lalu jalankan perbarui.py tanpa --db, supaya "
+              f"kunci penulis, log, dan skrip anaknya ikut database itu.", file=sys.stderr)
+        return 2
 
     tahap = tuple(args.hanya) if args.hanya else TAHAP
     FOLDER_LAPORAN.mkdir(parents=True, exist_ok=True)
@@ -251,30 +341,57 @@ def main() -> int:
             log.tutup()
             return 1
 
-    conn = koneksi(args.db)
-    buat_skema(conn)
+    try:
+        conn = buka_baca_saja(args.db) if args.coba else koneksi(args.db)
+    except (FileNotFoundError, sqlite3.Error) as e:
+        log(f"  {e}")
+        log.tutup()
+        return 1
+    if not siapkan_skema(conn, args.coba):
+        log(f"  skema database v{versi_skema(conn)} tertinggal dari v{VERSI_SKEMA}; "
+            f"jalankan sekali tanpa --coba supaya bermigrasi dulu")
+        conn.close()
+        log.tutup()
+        return 1
     sebelum = info(conn)
     hasil = {}
     try:
         if "cadangan" in tahap:
-            log("\n[1/4] cadangan")
+            log("\n[1/5] cadangan")
             try:
                 tahap_cadangan(args.db, args.coba, log)
             except Exception as e:
                 log(f"  GAGAL: {e}")
                 hasil["cadangan"] = "gagal"
+        # Tanpa cadangan tidak ada jalan mundur (lihat docstring modul), jadi
+        # tahap yang MENULIS database tidak dijalankan. Dulu pipeline tetap
+        # lanjut ke TWIC/broadcast; kode keluar 1 datang setelah tulisannya.
+        if hasil.get("cadangan") == "gagal":
+            menulis = [t for t in ("twic", "broadcast", "indeks") if t in tahap]
+            if menulis:
+                log(f"\n  BERHENTI: cadangan gagal, tahap {', '.join(menulis)} tidak dijalankan")
+            tahap = tuple(t for t in tahap if t not in menulis)
+        if "inti" in tahap:
+            log("\n[2/5] ekspor inti ke cloud")
+            try:
+                tahap_inti(args.db, args.coba, log)
+            except Exception as e:
+                log(f"  GAGAL: {e}")
+                hasil["inti"] = "gagal"
         if "twic" in tahap:
-            log("\n[2/4] TWIC")
+            log("\n[3/5] TWIC")
             hasil["twic"] = tahap_twic(conn, args.min_elo, args.coba, log,
                                        edisi=args.edisi, unduh_saja=args.unduh_saja)
         if "broadcast" in tahap:
-            log("\n[3/4] broadcast Lichess")
-            hasil["broadcast"] = tahap_broadcast(args.tier, args.coba, log)
+            log("\n[4/5] broadcast Lichess")
+            hasil["broadcast"] = tahap_broadcast(args.tier, args.coba, log, args.min_elo_bintang,
+                                                  args.hari, args.db)
         if "indeks" in tahap:
-            log("\n[4/4] indeks posisi")
-            hasil["indeks"] = tahap_indeks(args.coba, log)
+            log("\n[5/5] indeks posisi")
+            hasil["indeks"] = tahap_indeks(args.coba, log, args.db)
     finally:
-        conn.commit()
+        if not args.coba:
+            conn.commit()
         sesudah = info(conn)
         conn.close()
         if penjaga:
@@ -288,6 +405,8 @@ def main() -> int:
         log(f"  TWIC      : {t['edisi']} edisi, {t['dibaca']} partai dibaca, {t['lolos']} lolos"
             + (f", {t['baru']} baru" if not args.coba else "")
             + (f", {t['hilang']} tidak ada di arsip" if t["hilang"] else ""))
+    if "inti" in hasil:
+        log("  inti      : GAGAL (lihat di atas)")
     if "broadcast" in hasil:
         log(f"  broadcast : {'ok' if hasil['broadcast'] == 0 else 'GAGAL (kode ' + str(hasil['broadcast']) + ')'}")
     if "indeks" in hasil:
@@ -298,7 +417,7 @@ def main() -> int:
     if log.path:
         log(f"  log       : {log.path}")
     log.tutup()
-    gagal = hasil.get("cadangan") == "gagal" or any(hasil.get(k) not in (None, 0) for k in ("broadcast", "indeks"))
+    gagal = hasil.get("cadangan") == "gagal" or hasil.get("inti") == "gagal" or any(hasil.get(k) not in (None, 0) for k in ("broadcast", "indeks"))
     return 1 if gagal else 0
 
 

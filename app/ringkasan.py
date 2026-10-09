@@ -60,6 +60,47 @@ def _kelompok(nilai, tabel):
     return None
 
 
+def _nama_hasil(hasil: str | None, warna: str) -> str:
+    """menang / kalah / remis dari sudut pemain sendiri."""
+    if hasil == "1/2-1/2":
+        return "remis"
+    if hasil not in ("1-0", "0-1"):
+        return "belum selesai"
+    return "menang" if (hasil == "1-0") == (warna == "putih") else "kalah"
+
+
+def tertimbang(per_hasil: list[dict], hasil_semua: dict) -> dict | None:
+    """
+    Perkiraan angka kalau partai yang dianalisis TIDAK condong ke kekalahan.
+
+    Cara: hitung tiap angka di dalam kelompok hasil (menang/kalah/remis) —
+    di dalam satu kelompok tidak ada bias, karena semua partai kalah setara —
+    lalu rata-ratakan ulang memakai porsi hasil SEBENARNYA dari seluruh partai.
+    Ini rata-rata tertimbang biasa (post-stratification), bukan model.
+
+    Syarat: tiap kelompok yang punya bobot harus punya sampel; kalau ada yang
+    kosong, kembalikan None daripada menebak.
+    """
+    nilai = {b["nama"]: b for b in per_hasil}
+    bobot = {k: v for k, v in (hasil_semua or {}).items()
+             if k in ("menang", "kalah", "remis") and v}
+    if not bobot or any(k not in nilai or not nilai[k]["partai"] for k in bobot):
+        return None
+    total_bobot = sum(bobot.values())
+    keluar = {"dasar": {k: round(100 * v / total_bobot, 1) for k, v in bobot.items()},
+              "partai_dipakai": sum(nilai[k]["partai"] for k in bobot)}
+    for kunci in ("skor_persen", "akurasi", "rata_kehilangan",
+                  "blunder_per_partai", "mistake_per_partai"):
+        jumlah = pakai = 0.0
+        for k, b in bobot.items():
+            v = nilai[k].get(kunci)
+            if v is not None:
+                jumlah += b * v
+                pakai += b
+        keluar[kunci] = round(jumlah / pakai, 2 if "per_partai" in kunci else 1) if pakai else None
+    return keluar
+
+
 def cakupan_analisis(conn: sqlite3.Connection, pemain_ids: list[int],
                      format_: str | None = None) -> dict:
     """
@@ -83,6 +124,12 @@ def cakupan_analisis(conn: sqlite3.Connection, pemain_ids: list[int],
         params.append(format_)
     baris = conn.execute(f"""
         SELECT CASE WHEN g.hasil = '1/2-1/2' THEN 'remis'
+                    -- '*' dan hasil lain HARUS keluar lebih dulu: untuk '*'
+                    -- (g.hasil = '1-0') bernilai 0, sama dengan
+                    -- (putih_id IN ...) = 0 saat pemainnya Hitam, sehingga
+                    -- partai yang belum selesai terhitung MENANG (audit 27 Sep:
+                    -- pemain 7954, satu-satunya partainya '*', tercatat menang 1).
+                    WHEN g.hasil NOT IN ('1-0', '0-1') THEN 'lain'
                     WHEN (g.hasil = '1-0') = (g.putih_id IN ({tanda})) THEN 'menang'
                     WHEN g.hasil IN ('1-0', '0-1') THEN 'kalah'
                     ELSE 'lain' END AS hasil_saya,
@@ -155,7 +202,7 @@ def ringkasan_pemain(conn: sqlite3.Connection, pemain_ids: list[int],
     partai_rows = conn.execute(
         f"""
         SELECT g.id,
-               g.eco, g.pembukaan, g.hasil, al.warna,
+               g.eco, g.pembukaan, g.hasil, g.format, al.warna,
                CASE WHEN al.warna = 'putih' THEN g.elo_putih ELSE g.elo_hitam END AS elo_saya,
                CASE WHEN al.warna = 'putih' THEN g.elo_hitam ELSE g.elo_putih END AS elo_lawan,
                CASE WHEN al.warna = 'putih' THEN a.akurasi_putih ELSE a.akurasi_hitam END AS akurasi,
@@ -183,6 +230,13 @@ def ringkasan_pemain(conn: sqlite3.Connection, pemain_ids: list[int],
                                "akurasi": [], "tanpa_kesalahan": 0})
     pemb = defaultdict(lambda: {"partai": 0, "skor": 0.0, "n_skor": 0, "kehilangan": 0.0,
                                 "blunder": 0, "mistake": 0, "akurasi": []})
+    # Per format waktu dan per hasil. Yang per hasil dipakai dua kali: dibaca
+    # sendiri ("seburuk apa main saya waktu kalah") DAN untuk menimbang ulang
+    # angka total, karena partai kalah sengaja didahulukan saat analisis.
+    fmt = defaultdict(lambda: {"partai": 0, "skor": 0.0, "n_skor": 0, "kehilangan": 0.0,
+                               "blunder": 0, "mistake": 0, "akurasi": []})
+    hsl = defaultdict(lambda: {"partai": 0, "skor": 0.0, "n_skor": 0, "kehilangan": 0.0,
+                               "blunder": 0, "mistake": 0, "akurasi": []})
     total = {"partai": 0, "skor": 0.0, "n_skor": 0, "kehilangan": 0.0,
              "blunder": 0, "mistake": 0, "akurasi": []}
 
@@ -214,6 +268,8 @@ def ringkasan_pemain(conn: sqlite3.Connection, pemain_ids: list[int],
 
         keluarga = (r["pembukaan"] or "").split(":")[0].strip() or (r["eco"] or "?")
         isi(pemb[keluarga])
+        isi(fmt[r["format"] or "tanpa"])
+        isi(hsl[_nama_hasil(r["hasil"], r["warna"])])
 
     def rapikan(nama, d, dengan_kesalahan=False):
         n = d["partai"]
@@ -237,8 +293,14 @@ def ringkasan_pemain(conn: sqlite3.Connection, pemain_ids: list[int],
     per_lawan = [rapikan(n, kel[n], True) for n, _, _ in KELOMPOK_SELISIH if n in kel]
     per_pembukaan = sorted((rapikan(n, d) for n, d in pemb.items()),
                            key=lambda x: -x["partai"])[:15]
+    urut_fmt = {n: i for i, n in enumerate(("bullet", "blitz", "rapid", "klasik", "tanpa"))}
+    per_format = sorted((rapikan(n, d) for n, d in fmt.items()),
+                        key=lambda x: urut_fmt.get(x["nama"], 99))
+    per_hasil = sorted((rapikan(n, d) for n, d in hsl.items()),
+                       key=lambda x: -x["partai"])
 
     cakupan = cakupan_analisis(conn, pemain_ids, format_)
+    perkiraan = tertimbang(per_hasil, cakupan.get("hasil_semua", {}))
     catatan = [
         "Hanya partai yang sudah dianalisis yang dihitung.",
         "Fase dibagi berdasarkan nomor langkah (1-12, 13-40, 41+), bukan berdasarkan materi.",
@@ -257,6 +319,11 @@ def ringkasan_pemain(conn: sqlite3.Connection, pemain_ids: list[int],
             "karena partai kalah sengaja didahulukan. Skor dan akurasi di bawah lebih buruk "
             "daripada permainan sesungguhnya; yang tetap sah dibaca adalah pola kesalahannya, "
             "bukan angka hasilnya.")
+        if perkiraan:
+            catatan.insert(2,
+                "Perkiraan tertimbang mengoreksi condong itu: tiap angka dihitung di dalam "
+                "kelompok menang/kalah/remis, lalu dirata-ratakan ulang memakai porsi hasil "
+                "seluruh partai. Tetap perkiraan, bukan hasil analisis semua partai.")
 
     return {
         "pemain_ids": pemain_ids,
@@ -265,6 +332,9 @@ def ringkasan_pemain(conn: sqlite3.Connection, pemain_ids: list[int],
         "per_fase": per_fase,
         "per_kekuatan_lawan": per_lawan,
         "per_pembukaan": per_pembukaan,
+        "per_format": per_format,
+        "per_hasil": per_hasil,
+        "perkiraan_tertimbang": perkiraan,
         "cakupan": cakupan,
         "catatan": catatan,
     }

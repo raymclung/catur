@@ -43,7 +43,7 @@ from pathlib import Path
 import chess.pgn
 
 from app.db import PATH_DB, buat_skema, info, koneksi
-from app.impor import impor_satu, ke_int, perbarui_elo_terakhir
+from app.impor import impor_satu, ke_elo, perbarui_elo_terakhir
 from app.kunci_penulis import KunciPenulis, KunciTerpakai, penulis_berjalan
 
 AKAR = Path(__file__).resolve().parent
@@ -145,7 +145,7 @@ def cocok(h, target: dict[str, str], elo_min: int) -> bool:
             return True
     if elo_min:
         for w in ("WhiteElo", "BlackElo"):
-            e = ke_int(h.get(w))
+            e = ke_elo(h.get(w))
             if e is not None and e >= elo_min:
                 return True
     return False
@@ -228,6 +228,11 @@ def _impor() -> int:
                     break
                 h = game.headers
                 edisi["dibaca"] += 1
+                # Langkah ilegal: python-chess memotong sisa partai tanpa
+                # galat. Sama dengan app/impor.py: jangan simpan seolah utuh.
+                if game.errors:
+                    edisi["rusak"] += 1
+                    continue
 
                 if not cocok(h, target, args.elo_min):
                     continue

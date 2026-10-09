@@ -102,6 +102,13 @@
   }
 
   function saatJatuh(source, target) {
+    if (PilihPromosi.tunda(permainan, source, target, function (p) {
+      var mp = permainan.move({ from: source, to: target, promotion: p });
+      if (!mp) return;
+      riwayat.push(mp.san);
+      papan.position(permainan.fen());
+      setelahBerubah();
+    })) return "snapback";
     var m = permainan.move({ from: source, to: target, promotion: "q" });
     if (m === null) return "snapback";
     riwayat.push(m.san);

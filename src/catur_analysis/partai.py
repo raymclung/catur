@@ -41,11 +41,21 @@ BATAS_EVAL_CP = 1000
 # jadi keduanya cukup dicatat sebagai loss maksimum.
 BATAS_KEHILANGAN_CP = 1000
 
-# Ambang klasifikasi, dalam centipawn loss (selisih antara langkah terbaik
-# menurut engine dan langkah yang benar-benar dimainkan).
-AMBANG_BLUNDER = 300
-AMBANG_MISTAKE = 100
-AMBANG_INACCURACY = 50
+# Ambang klasifikasi = milik Lichess (lila modules/tree Advice.scala): turunnya
+# "winning chances" (-1..1, cp dibatasi ±1000) dari sudut pemain yang jalan.
+# Sampai 28 Sep 2026 di sini dipakai centipawn mentah (300/100/50), padahal
+# dokumen menyebut "rumus Lichess": sepertiga "blunder" bukan blunder menurut
+# Lichess (mis. +16 -> +7 saat sudah menang telak), sebaliknya 112 ribu
+# "mistake" adalah blunder Lichess (audit 28 Sep 2026).
+AMBANG_BLUNDER = 0.3
+AMBANG_MISTAKE = 0.2
+AMBANG_INACCURACY = 0.1
+# Untuk urutan mat (Advice.scala MateCreated/MateLost): seberapa jauh posisi
+# sudah kalah/menang (cp, sudut pemain) sebelum mat muncul/hilang.
+MAT_RINGAN_CP = 999
+MAT_SEDANG_CP = 700
+# cp posisi awal standar yang dipakai Lichess untuk akurasi (Cp.initial).
+CP_AWAL = 15
 
 KLASIFIKASI_ID = {
     "blunder": "Blunder",
@@ -90,7 +100,7 @@ class LangkahAnalisis:
 class RingkasanPemain:
     nama: str
     warna: str
-    akurasi: float
+    akurasi: float | None      # None = pihak ini belum melangkah (bukan 0%)
     rata_kehilangan_cp: float
     jumlah_langkah: int
     blunder: int = 0
@@ -178,24 +188,110 @@ def akurasi_satu_langkah(cp_sebelum: int, cp_sesudah: int) -> float:
     Dihitung dari selisih PELUANG MENANG, bukan selisih centipawn. Alasannya:
     kehilangan 100 cp saat posisi seimbang jauh lebih fatal daripada saat sudah
     unggul 900 cp, dan rumus berbasis peluang menang menangkap itu.
+
+    Persis lila `AccuracyPercent.fromWinPercents`: tidak turun = 100, dan +1
+    "bonus ketidakpastian" (analisis engine tidak sempurna).
     """
-    menang_sebelum = peluang_menang(cp_sebelum) * 100
-    menang_sesudah = peluang_menang(cp_sesudah) * 100
-    turun = max(0.0, menang_sebelum - menang_sesudah)
-    nilai = 103.1668 * math.exp(-0.04354 * turun) - 3.1669
+    return _akurasi_dari_persen(peluang_menang(cp_sebelum) * 100,
+                                peluang_menang(cp_sesudah) * 100)
+
+
+def _akurasi_dari_persen(sebelum: float, sesudah: float) -> float:
+    if sesudah >= sebelum:
+        return 100.0
+    nilai = 103.1668100711649 * math.exp(-0.04354415386753951 * (sebelum - sesudah)) \
+        - 3.166924740191411 + 1
     return max(0.0, min(100.0, nilai))
 
 
-def klasifikasikan(kehilangan_cp: int, adalah_terbaik: bool) -> str:
+def _adalah_mat(cp: int) -> bool:
+    return abs(cp) >= SKOR_MAT
+
+
+def klasifikasikan(eval_sebelum_cp: int, eval_sesudah_cp: int, adalah_terbaik: bool) -> str:
+    """
+    Klasifikasi satu langkah, aturan Lichess (lila Advice.scala). Kedua eval
+    dari sudut pemain yang jalan; mat diwakili ±SKOR_MAT.
+
+      * keduanya bukan mat: turunnya winning chances >= 0.3 blunder,
+        >= 0.2 mistake, >= 0.1 inaccuracy;
+      * MAT MUNCUL (tadinya cp, kini lawan punya mat): blunder, kecuali posisi
+        memang sudah kalah (< -999 inaccuracy, < -700 mistake);
+      * MAT HILANG (tadinya punya mat, kini tidak): blunder, kecuali tetap
+        menang besar (> 999 inaccuracy, > 700 mistake);
+      * mat ke mat lain (tertunda, dsb.) tidak dinilai.
+    """
     if adalah_terbaik:
         return "terbaik"
-    if kehilangan_cp >= AMBANG_BLUNDER:
-        return "blunder"
-    if kehilangan_cp >= AMBANG_MISTAKE:
-        return "mistake"
-    if kehilangan_cp >= AMBANG_INACCURACY:
-        return "inaccuracy"
+    mat_sebelum, mat_sesudah = _adalah_mat(eval_sebelum_cp), _adalah_mat(eval_sesudah_cp)
+    if not mat_sebelum and not mat_sesudah:
+        wc = lambda cp: 2 * peluang_menang(cp) - 1          # noqa: E731 - winning chances -1..1
+        turun = wc(eval_sebelum_cp) - wc(eval_sesudah_cp)
+        if turun >= AMBANG_BLUNDER:
+            return "blunder"
+        if turun >= AMBANG_MISTAKE:
+            return "mistake"
+        if turun >= AMBANG_INACCURACY:
+            return "inaccuracy"
+        return "baik"
+    if not mat_sebelum and eval_sesudah_cp <= -SKOR_MAT:      # mat muncul
+        if eval_sebelum_cp < -MAT_RINGAN_CP:
+            return "inaccuracy"
+        return "mistake" if eval_sebelum_cp < -MAT_SEDANG_CP else "blunder"
+    if eval_sebelum_cp >= SKOR_MAT and eval_sesudah_cp < SKOR_MAT:   # mat hilang
+        if mat_sesudah:
+            return "blunder"                                   # dari mat menang ke dimat
+        if eval_sesudah_cp > MAT_RINGAN_CP:
+            return "inaccuracy"
+        return "mistake" if eval_sesudah_cp > MAT_SEDANG_CP else "blunder"
     return "baik"
+
+
+def akurasi_partai(langkah: list[LangkahAnalisis], cp_awal_putih: int) -> dict[str, float | None]:
+    """
+    Akurasi per warna, persis lila `AccuracyPercent.gameAccuracy`.
+
+    Bukan rata-rata biasa: tiap langkah ditimbang volatilitas posisinya
+    (simpangan baku win% dalam jendela geser), lalu rata-rata tertimbang itu
+    dirata-rata dengan rata-rata HARMONIK. Rata-rata biasa membuat partai
+    dengan satu blunder tetap terlihat ~90% — median 4,6 poin di atas Lichess,
+    45 sisi berselisih >= 20 poin (audit 28 Sep 2026).
+
+    `cp_awal_putih`: eval posisi sebelum langkah pertama (Putih).
+    """
+    import statistics
+
+    if not langkah:
+        return {"putih": None, "hitam": None}
+    wp = lambda cp: peluang_menang(cp) * 100                 # noqa: E731
+    semua = [wp(cp_awal_putih)] + [wp(l.eval_putih_cp) for l in langkah]
+    n = len(langkah)
+    jendela = max(2, min(8, n // 10))
+    if len(semua) <= jendela:
+        geser = [semua]
+    else:
+        geser = [semua[i:i + jendela] for i in range(len(semua) - jendela + 1)]
+    daftar_jendela = [semua[:jendela]] * (min(jendela, len(semua)) - 2) + geser
+    bobot = [max(0.5, min(12.0, statistics.pstdev(j))) for j in daftar_jendela]
+
+    per_warna: dict[str, list[tuple[float, float]]] = {"putih": [], "hitam": []}
+    for i, l in enumerate(langkah):
+        if l.klasifikasi == "buku":
+            continue
+        sebelum, sesudah = semua[i], semua[i + 1]
+        if l.warna == "hitam":
+            sebelum, sesudah = 100 - sebelum, 100 - sesudah
+        per_warna[l.warna].append((_akurasi_dari_persen(sebelum, sesudah), bobot[i]))
+
+    hasil: dict[str, float | None] = {}
+    for warna, isi in per_warna.items():
+        if not isi:
+            hasil[warna] = None
+            continue
+        tertimbang = sum(a * b for a, b in isi) / sum(b for _, b in isi)
+        harmonik = statistics.harmonic_mean([a for a, _ in isi])
+        hasil[warna] = round((tertimbang + harmonik) / 2, 1)
+    return hasil
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +355,19 @@ def analisis_partai(
             except ValueError:
                 terbaik_uci = ""
 
+        # Langkah paksa (hanya satu langkah sah) tidak bisa salah, berapa pun
+        # angka engine-nya: efek horizon antara dua pencarian dulu memberinya
+        # kehilangan sampai 1000 dan menjadikannya "sebab kalah" (audit 28 Sep
+        # 2026: 470 dari 1.137 langkah paksa dalam sampel diberi kehilangan).
+        paksa = board.legal_moves.count() == 1
+
         board.push(move)
 
-        if board.is_game_over():
+        # HANYA posisi tanpa langkah sah yang tidak bisa dievaluasi engine.
+        # `is_game_over()` juga benar untuk pengulangan lima kali / 75 langkah
+        # / materi tidak cukup, padahal PGN-nya masih berlanjut: dulu posisi
+        # itu diberi eval 0 buatan (410 titik di 325 partai, audit 28 Sep 2026).
+        if board.is_checkmate() or board.is_stalemate():
             # Posisi akhir tidak perlu dianalisis engine.
             eval_sesudah = _eval_posisi_akhir(board, pemain)
             hasil_sesudah = None
@@ -275,13 +381,17 @@ def analisis_partai(
             # dan disimpan apa adanya supaya semua tampilan konsisten.
             mat_sesudah = hasil_sesudah[0]["mate"]
 
-        kehilangan = min(max(0, eval_sebelum - eval_sesudah), BATAS_KEHILANGAN_CP)
-        adalah_terbaik = bool(terbaik_san) and terbaik_san == san
+        adalah_terbaik = (bool(terbaik_san) and terbaik_san == san) or paksa
+        # Langkah yang SAMA dengan pilihan engine tidak kehilangan apa pun;
+        # selisih eval-nya murni beda kedalaman antara dua pencarian (5.357
+        # baris "terbaik" dulu berkehilangan >= 300, audit 28 Sep 2026).
+        kehilangan = 0 if adalah_terbaik else min(max(0, eval_sebelum - eval_sesudah),
+                                                  BATAS_KEHILANGAN_CP)
 
         if ply < lewati_langkah_awal:
             klasifikasi = "buku"
         else:
-            klasifikasi = klasifikasikan(kehilangan, adalah_terbaik)
+            klasifikasi = klasifikasikan(eval_sebelum, eval_sesudah, adalah_terbaik)
 
         laporan.langkah.append(
             LangkahAnalisis(
@@ -305,8 +415,7 @@ def analisis_partai(
         # Hasil analisis posisi sesudah jadi "sebelum" untuk langkah berikutnya.
         hasil_sebelum = hasil_sesudah
 
-    laporan.ringkasan_putih = _ringkas(laporan, "putih", laporan.putih)
-    laporan.ringkasan_hitam = _ringkas(laporan, "hitam", laporan.hitam)
+    _isi_ringkasan(laporan, game)
     laporan.turning_point_ply = _cari_turning_point(laporan)
     return laporan
 
@@ -382,14 +491,30 @@ def analisis_dari_daftar(game: chess.pgn.Game, daftar: list[dict | None]) -> Lap
             try:
                 gerak = chess.Move.from_uci(entri["best"])
                 if gerak in board.legal_moves:
-                    terbaik_uci, terbaik_san = gerak.uci(), board.san(gerak)
+                    # Lichess menulis rokade sebagai raja-makan-benteng
+                    # (`e8h8`); python-chess menerimanya, tapi papan dan soal
+                    # latihan membandingkan dengan `e8g8`, jadi O-O yang benar
+                    # dinilai salah (259 baris, audit 28 Sep 2026). Lewat SAN
+                    # jadi bentuk UCI standar.
+                    terbaik_san = board.san(gerak)
+                    terbaik_uci = board.parse_san(terbaik_san).uci()
                     variasi = (entri.get("variation") or terbaik_san).split()[:6]
             except ValueError:
                 pass
 
+        paksa = board.legal_moves.count() == 1
         board.push(move)
 
-        if entri and ("eval" in entri or "mate" in entri):
+        # Mat di papan didahulukan dari angka di PGN: [%eval -5.56] sesudah
+        # Rc1# pernah tersimpan sebagai "baik" tanpa mat, dan [%eval #0]
+        # terbaca mate=0 -> dikira dikalahkan (audit 28 Sep 2026).
+        if board.is_checkmate() or board.is_stalemate():
+            eval_sesudah = _eval_posisi_akhir(board, pemain)
+            mat_sesudah = 0 if board.is_checkmate() else None
+            cp_putih_sesudah = eval_sesudah if pemain == chess.WHITE else -eval_sesudah
+        elif entri and entri.get("mate") == 0:
+            return None                        # mat 0 tanpa mat di papan: sumbernya rusak
+        elif entri and ("eval" in entri or "mate" in entri):
             if entri.get("mate") is not None:
                 mat_sesudah = int(entri["mate"])
                 cp_putih_sesudah = SKOR_MAT if mat_sesudah > 0 else -SKOR_MAT
@@ -409,7 +534,8 @@ def analisis_dari_daftar(game: chess.pgn.Game, daftar: list[dict | None]) -> Lap
         else:
             eval_sebelum = eval_sebelumnya_putih if pemain == chess.WHITE else -eval_sebelumnya_putih
 
-        kehilangan = min(max(0, eval_sebelum - eval_sesudah), BATAS_KEHILANGAN_CP)
+        kehilangan = 0 if paksa else min(max(0, eval_sebelum - eval_sesudah),
+                                         BATAS_KEHILANGAN_CP)
         laporan.langkah.append(
             LangkahAnalisis(
                 ply=ply,
@@ -424,7 +550,7 @@ def analisis_dari_daftar(game: chess.pgn.Game, daftar: list[dict | None]) -> Lap
                 langkah_terbaik_san=terbaik_san,
                 langkah_terbaik_uci=terbaik_uci,
                 variasi_terbaik=variasi,
-                klasifikasi=klasifikasikan(kehilangan, False),
+                klasifikasi=klasifikasikan(eval_sebelum, eval_sesudah, paksa),
                 mat_sesudah=mat_sesudah,
             )
         )
@@ -432,8 +558,7 @@ def analisis_dari_daftar(game: chess.pgn.Game, daftar: list[dict | None]) -> Lap
 
     if not laporan.langkah:
         return None
-    laporan.ringkasan_putih = _ringkas(laporan, "putih", laporan.putih)
-    laporan.ringkasan_hitam = _ringkas(laporan, "hitam", laporan.hitam)
+    _isi_ringkasan(laporan, game)
     laporan.turning_point_ply = _cari_turning_point(laporan)
     return laporan
 
@@ -455,19 +580,37 @@ def _eval_posisi_akhir(board: chess.Board, pemain: chess.Color) -> int:
     return 0  # remis dalam segala bentuknya
 
 
-def _ringkas(laporan: LaporanPartai, warna: str, nama: str) -> RingkasanPemain:
+def cp_awal_putih(game: chess.pgn.Game, langkah: list[LangkahAnalisis]) -> int:
+    """
+    Eval posisi sebelum langkah pertama untuk akurasi. Posisi awal standar =
+    Cp.initial seperti Lichess; partai dari FEN memakai eval sebelum langkah
+    pertamanya (sudut Putih).
+    """
+    if game.board().fen() == chess.STARTING_FEN or not langkah:
+        return CP_AWAL
+    l = langkah[0]
+    return l.eval_sebelum_cp if l.warna == "putih" else -l.eval_sebelum_cp
+
+
+def _isi_ringkasan(laporan: LaporanPartai, game: chess.pgn.Game) -> None:
+    akurasi = akurasi_partai(laporan.langkah, cp_awal_putih(game, laporan.langkah))
+    laporan.ringkasan_putih = _ringkas(laporan, "putih", laporan.putih, akurasi["putih"])
+    laporan.ringkasan_hitam = _ringkas(laporan, "hitam", laporan.hitam, akurasi["hitam"])
+
+
+def _ringkas(laporan: LaporanPartai, warna: str, nama: str,
+             akurasi: float | None = None) -> RingkasanPemain:
     langkah = [l for l in laporan.langkah if l.warna == warna and l.klasifikasi != "buku"]
     if not langkah:
-        return RingkasanPemain(nama=nama, warna=warna, akurasi=0.0,
+        # Belum melangkah = tidak ada akurasi, BUKAN 0% (dulu 0.0 ikut
+        # dirata-ratakan di ringkasan; 17 partai satu-ply, audit 28 Sep 2026).
+        return RingkasanPemain(nama=nama, warna=warna, akurasi=None,
                                rata_kehilangan_cp=0.0, jumlah_langkah=0)
 
-    nilai_akurasi = [
-        akurasi_satu_langkah(l.eval_sebelum_cp, l.eval_sesudah_cp) for l in langkah
-    ]
     return RingkasanPemain(
         nama=nama,
         warna=warna,
-        akurasi=round(sum(nilai_akurasi) / len(nilai_akurasi), 1),
+        akurasi=akurasi,
         rata_kehilangan_cp=round(sum(l.kehilangan_cp for l in langkah) / len(langkah), 1),
         jumlah_langkah=len(langkah),
         blunder=sum(1 for l in langkah if l.klasifikasi == "blunder"),

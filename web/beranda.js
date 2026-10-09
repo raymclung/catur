@@ -19,6 +19,8 @@
     barisAkun: document.getElementById("baris-akun"),
     kekalahan: document.getElementById("kekalahan-ringkas"),
     latihan: document.getElementById("latihan-ringkas"),
+    rencana: document.getElementById("rencana"),
+    rencanaMinggu: document.getElementById("rencana-minggu"),
     pintasan: document.getElementById("pintasan")
   };
 
@@ -89,49 +91,26 @@
 
   /* ---------- kekalahan terbaru (penggolongan ringkas) ---------- */
 
-  var tagPgn = AlatCatur.tagPgn, jamPerPly = AlatCatur.jamPerPly, detikDipakai = AlatCatur.detikDipakai;
-
   var LABEL = { waktu: "kalah waktu", missclick: "blunder cepat", blunder: "blunder", dikalahkan: "dikalahkan", belum: "belum dianalisis" };
 
-  function golongkan(warna, det, analisis) {
-    var tags = tagPgn(det.pgn || ""), jam = jamPerPly(det.pgn || "");
-    if (AlatCatur.kalahWaktu(tags)) return { sebab: "waktu", ket: "" };
-    if (!analisis) return { sebab: "belum", ket: "" };
-    var punya = analisis.langkah.filter(function (l) { return l.warna === warna && (l.kehilangan_cp || 0) >= 300; });
-    punya.sort(function (a, b) { return b.kehilangan_cp - a.kehilangan_cp; });
-    if (!punya.length) return { sebab: "dikalahkan", ket: "tanpa blunder besar" };
-    var cepat = punya.filter(function (l) { var d = detikDipakai(jam, l.ply, det.kontrol_waktu); return d !== null && d <= 2; });
-    var b = cepat.length ? cepat[0] : punya[0];
-    var d = detikDipakai(jam, b.ply, det.kontrol_waktu);
-    return {
-      sebab: cepat.length ? "missclick" : "blunder",
-      ket: (b.warna === "putih" ? b.nomor_langkah + "." : b.nomor_langkah + "…") + b.san +
-        " −" + b.kehilangan_cp + " cp" + (d !== null ? " · " + d + " s" : "")
-    };
-  }
-
+  /* Sebab kekalahan diambil dari server (GET /api/kekalahan, app/sebab_kalah.py),
+     aturan yang sama dengan halaman Kekalahan. Dulu Beranda punya salinan
+     aturan lama sendiri di sini (tanpa "jam habis tapi posisi memang sudah
+     kalah"), jadi partai yang sama bisa berbunyi "kalah waktu" di Beranda dan
+     "blunder" di Kekalahan (audit 27 Sep 2026). lawan=semua: Beranda
+     menampilkan kekalahan terbaru apa adanya, tanpa saringan lawan. */
   function muatKekalahan(akun) {
-    return Promise.all(akun.map(function (a) {
-      return Promise.all([
-        ambil("/api/partai?pemain_id=" + a.id + "&warna=putih&hasil=0-1&per_halaman=8&urut=terbaru").catch(function () { return { partai: [] }; }),
-        ambil("/api/partai?pemain_id=" + a.id + "&warna=hitam&hasil=1-0&per_halaman=8&urut=terbaru").catch(function () { return { partai: [] }; })
-      ]).then(function (r) {
-        var d = [];
-        r[0].partai.forEach(function (g) { d.push({ g: g, warna: "putih", akun: a }); });
-        r[1].partai.forEach(function (g) { d.push({ g: g, warna: "hitam", akun: a }); });
-        return d;
+    var q = akun.map(function (a) { return "pemain_id=" + a.id; }).join("&") +
+      "&lawan=semua&batas=" + JUMLAH_KEKALAHAN;
+    /* /api/kekalahan wajib punya pemain_id; tanpa akun = daftar kosong. */
+    return (akun.length ? ambil("/api/kekalahan?" + q) : Promise.resolve({ partai: [] })).then(function (d) {
+      return d.partai.map(function (p) {
+        var g = { id: p.id, tanggal: p.tanggal, format: p.format, kontrol_waktu: p.kontrol_waktu };
+        if (p.warna === "putih") { g.hitam = p.lawan; g.elo_hitam = p.lawan_elo; }
+        else { g.putih = p.lawan; g.elo_putih = p.lawan_elo; }
+        return { x: { g: g, warna: p.warna, akun: { nama: p.akun } },
+                 gol: { sebab: p.sebab, ket: p.keterangan } };
       });
-    })).then(function (kelompok) {
-      var semua = [];
-      kelompok.forEach(function (k) { semua = semua.concat(k); });
-      semua.sort(function (a, b) { return (b.g.tanggal || "").localeCompare(a.g.tanggal || ""); });
-      semua = semua.slice(0, JUMLAH_KEKALAHAN);
-      return Promise.all(semua.map(function (x) {
-        return ambil("/api/partai/" + x.g.id).then(function (det) {
-          return fetch("/api/partai/" + x.g.id + "/analisis").then(function (r) { return r.ok ? r.json() : null; })
-            .then(function (a) { return { x: x, det: det, gol: golongkan(x.warna, det, a) }; });
-        }).catch(function () { return null; });
-      }));
     }).then(function (hasil) {
       el.kekalahan.textContent = "";
       hasil = hasil.filter(Boolean);
@@ -158,20 +137,90 @@
     });
   }
 
-  /* ---------- latihan: progres dari localStorage ---------- */
+  /* ---------- latihan: catatan dari database (A38), bukan localStorage ----------
+     Dulu menghitung kunci di localStorage; sejak catatan pindah ke server,
+     angka itu cuma milik satu browser dan bisa berbeda dari kenyataan. */
 
   function gambarLatihan() {
-    var dikuasai = 0;
-    try { dikuasai = Object.keys(JSON.parse(localStorage.getItem("latihan.dikuasai") || "{}")).length; } catch (e) { dikuasai = 0; }
     el.latihan.textContent = "";
-    var besar = buat("div", "angka-besar", dikuasai);
-    el.latihan.appendChild(buat("div", "label", "posisi dikuasai (browser ini)"));
-    el.latihan.appendChild(besar);
-    el.latihan.appendChild(buat("div", "kecil redup", dikuasai ? "Soal yang sudah benar muncul paling belakang." : "Belum ada. Mulai dari blunder di partai kalah."));
+    ambil("/api/latihan/ringkasan").then(function (r) {
+      var k = r.kesalahan || {}, p = r.pembukaan || {};
+      var selesai = (k.selesai || 0) + (p.selesai || 0);
+      el.latihan.textContent = "";
+      el.latihan.appendChild(buat("div", "label", "soal selesai"));
+      el.latihan.appendChild(buat("div", "angka-besar", selesai));
+      var rincian = [];
+      if ((k.menunggu || 0) + (p.menunggu || 0)) rincian.push(((k.menunggu || 0) + (p.menunggu || 0)) + " menunggu " + (r.jeda_ulang_hari || 3) + " hari");
+      if ((k.siap_ulang || 0) + (p.siap_ulang || 0)) rincian.push(((k.siap_ulang || 0) + (p.siap_ulang || 0)) + " siap diulang");
+      if (p.selesai) rincian.push(p.selesai + " dari pembukaan");
+      el.latihan.appendChild(buat("div", "kecil redup",
+        rincian.length ? rincian.join(" · ") : "Belum ada. Mulai dari blunder di partai kalah."));
+      tautanLatihan();
+    }).catch(function () {
+      el.latihan.textContent = "";
+      el.latihan.appendChild(buat("div", "kecil redup", "Catatan latihan tidak bisa diambil dari server."));
+      tautanLatihan();
+    });
+  }
+
+  function tautanLatihan() {
     var tb = buat("div", "tautan-baris");
     tb.appendChild(tautan("latih blunder →", "/static/latihan.html?jenis=blunder", "Hanya blunder (??)"));
     tb.appendChild(tautan("semua kesalahan →", "/static/latihan.html", "Blunder + kesalahan"));
+    tb.appendChild(tautan("pembukaan →", "/static/latihan.html?mode=pembukaan",
+      "Posisi repertoire tempat langkahmu jarang dimainkan GM"));
     el.latihan.appendChild(tb);
+  }
+
+  /* ---------- rencana minggu ini ---------- */
+
+  function gambarRencana(akun) {
+    if (!akun.length) {
+      el.rencana.textContent = "";
+      el.rencana.appendChild(buat("div", "pesan kecil", "Belum ada akun pribadi di database."));
+      return Promise.resolve();
+    }
+    var q = akun.map(function (a) { return "pemain_id=" + a.id; }).join("&");
+    return ambil("/api/rencana?" + q).then(function (d) {
+      el.rencana.textContent = "";
+      el.rencanaMinggu.textContent = "· mulai " + d.minggu_mulai;
+
+      if (!d.kelemahan.length) {
+        el.rencana.appendChild(buat("div", "pesan kecil",
+          "Belum ada kelemahan yang selisihnya cukup besar untuk disebut."));
+      }
+      d.kelemahan.forEach(function (k, i) {
+        var baris = buat("div", "kartu");
+        baris.style.margin = i ? "10px 0 0" : "0";
+        baris.style.padding = "10px 12px";
+        baris.appendChild(buat("div", null, (i + 1) + ". " + k.judul));
+        baris.appendChild(buat("div", "kecil", k.angka));
+        baris.appendChild(buat("div", "kecil redup", k.saran));
+        var tb = buat("div", "tautan-baris");
+        k.tautan.forEach(function (t) { tb.appendChild(tautan(t.teks + " →", t.url)); });
+        baris.appendChild(tb);
+        el.rencana.appendChild(baris);
+      });
+
+      /* Minggu ini vs minggu lalu: supaya kelihatan latihannya jalan atau tidak. */
+      var l = d.latihan || {};
+      var garis = ["kesalahan", "pembukaan"].map(function (m) {
+        var a = (l[m] || {}).minggu_ini || {}, b = (l[m] || {}).minggu_lalu || {};
+        return m + ": " + (a.dijawab || 0) + " soal minggu ini (" + (a.benar || 0) + " benar)" +
+               ", minggu lalu " + (b.dijawab || 0);
+      });
+      var ringkas = buat("div", "kecil");
+      ringkas.style.marginTop = "10px";
+      ringkas.appendChild(teks(garis.join(" · ")));
+      el.rencana.appendChild(ringkas);
+
+      var cat = buat("div", "kecil redup");
+      (d.catatan || []).forEach(function (c) { cat.appendChild(buat("div", null, "· " + c)); });
+      el.rencana.appendChild(cat);
+    }).catch(function (e) {
+      el.rencana.textContent = "";
+      el.rencana.appendChild(buat("div", "kecil redup", "Rencana tidak bisa dihitung: " + e.message));
+    });
   }
 
   /* ---------- pintasan ---------- */
@@ -196,6 +245,7 @@
   AkunPribadi.muat().then(function (akun) {
     el.statusAkun.textContent = akun.length ? "· " + akun.length + " akun" : "";
     gambarPintasan(akun);
+    gambarRencana(akun);
     return Promise.all(akun.map(function (a) {
       return ambil("/api/pemain/" + a.id).catch(function () { return null; });
     })).then(function (profil) {

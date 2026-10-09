@@ -18,11 +18,8 @@
   var timerVariasi = null;
   var permintaanVariasi = null;
 
-  var TANDA = { blunder: "??", mistake: "?", inaccuracy: "?!", terbaik: "!" };
-  var NAMA_KLAS = {
-    blunder: "Blunder", mistake: "Kesalahan", inaccuracy: "Kurang akurat",
-    terbaik: "Langkah terbaik", baik: "Baik", buku: "Teori pembukaan"
-  };
+  var peluangMenang = RingkasanAnalisis.peluangMenang;
+  var formatEval = RingkasanAnalisis.formatEval;
 
   var el = {
     info: document.getElementById("info"),
@@ -65,7 +62,11 @@
     }
     langkah = permainan.history({ verbose: true });
 
-    var ulang = new Chess();
+    /* Partai "From Position" (Lichess) dan soal/studi membawa tag [FEN]:
+       memutarnya dari posisi awal standar menghasilkan partai karangan
+       (audit 27 Sep 2026: partai 8435 tampil 1. e5 Nf3 dengan warna
+       tertukar; 1.860 partai seperti ini). */
+    var ulang = AlatCatur.permainanAwal(permainan);
     posisi = [ulang.fen()];
     for (var i = 0; i < langkah.length; i++) {
       ulang.move(langkah[i].san);
@@ -82,9 +83,12 @@
       el.daftar.appendChild(buat("div", "pesan", "Partai ini tidak punya langkah."));
       return;
     }
+    /* Nomor dari FEN awal, bukan dari indeks: partai ber-FEN bisa mulai
+       dengan Hitam ("1... e5") atau dari langkah ke-30. */
+    var nomor = nomorSan(posisi[0], langkah.map(function (l) { return l.san; }));
     for (var i = 0; i < langkah.length; i++) {
-      if (i % 2 === 0) {
-        el.daftar.appendChild(buat("span", "nomor", (i / 2 + 1) + "."));
+      if (nomor[i].nomor) {
+        el.daftar.appendChild(buat("span", "nomor", nomor[i].nomor));
       }
       var s = buat("span", "langkah", langkah[i].san);
       s.dataset.indeks = i + 1;
@@ -128,186 +132,38 @@
     el.fen.textContent = posisi[indeks];
     perbaruiSorotan();
     perbaruiAnalisisTampilan();
-    gambarPenandaJam();
+    GrafikPartai.penandaJam(indeks);
     perbaruiPenjelajah();
     if (indeks >= posisi.length - 1) hentikanAuto();
   }
 
-  /* ---------- keluar dari praktik GM (RENCANA Phase 7: bandingkan dengan GM) ----------
-     Berjalan ply demi ply lewat /api/posisi?sumber=gm sampai posisi tidak ada
-     lagi di indeks GM (paling jauh 40 ply). Partai yang sendiri bersumber GM
-     (TWIC/broadcast) selalu menghitung dirinya, jadi ambangnya 1, bukan 0. */
+  /* ---------- praktik GM & penjelajah: web/praktik-gm.js ---------- */
 
-  var elT = document.getElementById("teori-gm");
-  var MAKS_PLY_TEORI = 40;
+  /* Pindah ke titik i dari kartu mana pun (praktik GM, ringkasan analisis):
+     autoplay berhenti dulu. Disuntik ke modul supaya mereka tidak perlu
+     tahu apa-apa soal autoplay maupun navigasi langkah. */
+  function lompat(i) {
+    hentikanAuto();
+    keIndeks(i);
+  }
 
   function cariKeluarTeori(g) {
-    if (!elT || !langkah.length) return;
-    var sendiri = (g.sumber === "twic" || g.sumber === "lichess-broadcast") ? 1 : 0;
-    var maks = Math.min(MAKS_PLY_TEORI, langkah.length);
-    var i = 0;
-    var terakhir = null;   // {i, d}: posisi terakhir yang masih ada di praktik GM
-
-    function selesai() { gambarTeori(terakhir, i, maks, sendiri); }
-    function periksa() {
-      if (i > maks) { selesai(); return; }
-      fetch("/api/posisi?fen=" + encodeURIComponent(posisi[i]) + "&sumber=gm")
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          if (!d || d.total - sendiri <= 0) { selesai(); return; }
-          terakhir = { i: i, d: d };
-          i++;
-          periksa();
-        })
-        .catch(selesai);
-    }
-    periksa();
-  }
-
-  function gambarTeori(terakhir, iKeluar, maks, sendiri) {
-    elT.textContent = "";
-    var h = buat("h2", null, "Praktik GM");
-    elT.appendChild(h);
-
-    if (!terakhir) {
-      elT.appendChild(buat("div", "kecil redup", "Posisi awal tidak ada di indeks GM (indeks belum dibangun?)."));
-      elT.hidden = false;
-      return;
-    }
-    if (iKeluar > maks) {
-      elT.appendChild(buat("div", "kecil redup", maks + " langkah pertama semuanya ada dalam praktik GM."));
-      elT.hidden = false;
-      return;
-    }
-
-    /* langkah[terakhir.i] = langkah yang pertama kali keluar dari praktik GM */
-    var l = langkah[terakhir.i];
-    var nomor = Math.floor(terakhir.i / 2) + 1;
-    var label = (terakhir.i % 2 === 0 ? nomor + "." : nomor + "…") + l.san;
-    var baris = buat("div", null);
-    baris.appendChild(buat("span", null, sendiri ? "Langkah baru di luar database GM: " : "Keluar dari praktik GM di "));
-    var tautan = buat("span", "langkah", label);
-    tautan.title = "Lompat ke langkah ini";
-    tautan.addEventListener("click", function () { hentikanAuto(); keIndeks(terakhir.i + 1); });
-    baris.appendChild(tautan);
-    baris.appendChild(buat("span", "redup kecil", "  · posisi sebelumnya ada di " + (terakhir.d.total - sendiri).toLocaleString("id-ID") + " partai GM lain"));
-    elT.appendChild(baris);
-
-    /* Partai bersumber GM ikut terhitung di indeks: kurangi langkahnya sendiri
-       supaya "GM memainkan" hanya berisi partai lain. */
-    var alternatif = terakhir.d.langkah.map(function (m) {
-      return sendiri && m.san === l.san ? { san: m.san, uci: m.uci, n: m.n - 1, skor_putih: m.skor_putih } : m;
-    }).filter(function (m) { return m.n > 0; });
-    var alt = buat("div", "teori-langkah");
-    alt.appendChild(buat("span", "redup kecil", alternatif.length ? "GM lain memainkan:" : "Tidak ada partai GM lain dari posisi ini."));
-    alternatif.slice(0, 4).forEach(function (m) {
-      var s = buat("span", "langkah", m.san);
-      s.title = "Mainkan sebagai variasi";
-      s.addEventListener("click", function () {
-        hentikanAuto();
-        keIndeks(terakhir.i);
-        if (m.uci && typeof mainkanVariasi === "function") mainkanVariasi(m.uci.slice(0, 2), m.uci.slice(2, 4));
-      });
-      alt.appendChild(s);
-      alt.appendChild(buat("span", "n", m.n.toLocaleString("id-ID") + "× · " + (m.skor_putih === null ? "—" : m.skor_putih + "%")));
+    PraktikGm.cariKeluarTeori(g, langkah, posisi, el.daftar, {
+      lompat: lompat,
+      mainkan: function (i, uci) {
+        lompat(i);
+        if (uci) mainkanVariasi(uci.slice(0, 2), uci.slice(2, 4), uci.slice(4));
+      }
     });
-    var j = document.createElement("a");
-    j.href = "/jelajah?fen=" + encodeURIComponent(posisi[terakhir.i]);
-    j.className = "kecil";
-    j.appendChild(teks("jelajah →"));
-    alt.appendChild(j);
-    elT.appendChild(alt);
-
-    var tanda = el.daftar.querySelector('.langkah[data-indeks="' + (terakhir.i + 1) + '"]');
-    if (tanda) {
-      tanda.classList.add("keluar-teori");
-      tanda.title = (tanda.title ? tanda.title + " · " : "") + "keluar dari praktik GM";
-    }
-    elT.hidden = false;
   }
-
-  /* ---------- penjelajah pembukaan (mengikuti posisi papan) ----------
-     Ditunda sedikit supaya menahan → tidak memicu satu permintaan per ply. */
-
-  var elJ = {
-    tabel: document.getElementById("penjelajah-tabel"),
-    tautan: document.getElementById("tautan-jelajah"),
-    tautanDaftar: document.getElementById("tautan-daftar-posisi")
-  };
-
-  /* Bar + = − seperti di /jelajah, versi ringkas. */
-  function selBarHasil(l) {
-    var td = document.createElement("td");
-    var selesai = l.menang_putih + l.remis + l.menang_hitam;
-    if (!selesai) return td;
-    var w = document.createElement("div");
-    w.style.cssText = "display:flex;height:12px;width:110px;border-radius:3px;overflow:hidden;border:1px solid #ccc";
-    [[l.menang_putih, "#f4f4f2"], [l.remis, "#a5a5a0"], [l.menang_hitam, "#3a3a3a"]].forEach(function (x) {
-      var s = document.createElement("div");
-      s.style.cssText = "width:" + (100 * x[0] / selesai) + "%;background:" + x[1];
-      s.title = x[0];
-      w.appendChild(s);
-    });
-    td.appendChild(w);
-    td.appendChild(buat("span", "redup kecil", " " + l.menang_putih + "/" + l.remis + "/" + l.menang_hitam));
-    return td;
-  }
-
-  /* Tautan ke daftar partai yang mencapai posisi SETELAH langkah san. */
-  function selTautanDaftar(fen, san) {
-    var td = buat("td", "kecil");
-    td.style.whiteSpace = "nowrap";
-    var c = new Chess(fen);
-    if (!c.move(san)) return td;
-    var a = document.createElement("a");
-    a.href = "/?fen=" + encodeURIComponent(c.fen());
-    a.title = "Daftar partai yang mencapai posisi setelah " + san;
-    a.appendChild(teks("daftar →"));
-    td.appendChild(a);
-    return td;
-  }
-  var timerJelajah = null;
-  var permintaanJelajah = 0;
 
   function perbaruiPenjelajah() {
-    if (!elJ.tabel) return;
-    var fen = fenSaatIni();
-    elJ.tautan.href = "/jelajah?fen=" + encodeURIComponent(fen);
-    if (elJ.tautanDaftar) elJ.tautanDaftar.href = "/?fen=" + encodeURIComponent(fen);
-    clearTimeout(timerJelajah);
-    timerJelajah = setTimeout(function () {
-      var ke = ++permintaanJelajah;
-      fetch("/api/posisi?fen=" + encodeURIComponent(fen) + "&sumber=gm")
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          if (ke !== permintaanJelajah) return;
-          elJ.tabel.textContent = "";
-          if (!d || d.langkah.length === 0) {
-            var tr0 = document.createElement("tr");
-            var td0 = buat("td", "pesan kecil", d ? "Tidak ada partai GM dari posisi ini." : "Indeks posisi belum dibangun (python indeks_posisi.py).");
-            td0.colSpan = 6;
-            tr0.appendChild(td0);
-            elJ.tabel.appendChild(tr0);
-            return;
-          }
-          d.langkah.slice(0, 8).forEach(function (l) {
-            var tr = document.createElement("tr");
-            tr.style.cursor = "default";
-            var dimainkan = !variasi && (langkahAnalisis(indeks + 1) ? langkahAnalisis(indeks + 1).uci === l.uci
-                          : (langkah[indeks] && langkah[indeks].from + langkah[indeks].to === l.uci.substr(0, 4)));
-            var td = buat("td", "mono", l.san);
-            if (dimainkan) td.appendChild(buat("span", "redup kecil", "  ← dimainkan"));
-            tr.appendChild(td);
-            tr.appendChild(buat("td", "mono", l.n + "  (" + Math.round(100 * l.n / d.total) + "%)"));
-            tr.appendChild(buat("td", "mono", l.skor_putih === null ? "—" : l.skor_putih + "%"));
-            tr.appendChild(selBarHasil(l));
-            tr.appendChild(buat("td", "mono", l.elo_rata || "—"));
-            tr.appendChild(selTautanDaftar(fen, l.san));
-            elJ.tabel.appendChild(tr);
-          });
-        })
-        .catch(function () { /* kartu penjelajah opsional */ });
-    }, 250);
+    PraktikGm.perbaruiPenjelajah(fenSaatIni(), function (l) {
+      if (variasi) return false;
+      var la = langkahAnalisis(indeks + 1);
+      return la ? la.uci === l.uci
+        : !!(langkah[indeks] && langkah[indeks].from + langkah[indeks].to === l.uci.substr(0, 4));
+    });
   }
 
   /* ---------- variasi: memainkan langkah sendiri dari posisi partai ----------
@@ -322,10 +178,12 @@
     return variasi ? variasi.permainan : new Chess(posisi[indeks]);
   }
 
-  function mainkanVariasi(dari, ke) {
+  /* promosi: bidak pilihan ("q","r","b","n"); kosong = ratu. Penangan
+     seret/klik menanyakannya lewat PilihPromosi sebelum memanggil ini. */
+  function mainkanVariasi(dari, ke, promosi) {
     var baru = !variasi;
     var g = baru ? new Chess(posisi[indeks]) : variasi.permainan;
-    var m = g.move({ from: dari, to: ke, promotion: "q" });
+    var m = g.move({ from: dari, to: ke, promotion: promosi || "q" });
     if (!m) return null;
     if (baru) variasi = { dari: indeks, permainan: g, san: [] };
     variasi.san.push(m.san);
@@ -379,8 +237,8 @@
     elV.panel.className = "komentar variasi";
 
     var judul = buat("div");
-    var dasar = variasi.dari === 0 ? "posisi awal"
-      : "langkah " + Math.ceil(variasi.dari / 2) + (variasi.dari % 2 ? "." : "...") + " " + langkah[variasi.dari - 1].san;
+    var sebelum = variasi.dari > 0 ? nomorSan(posisi[variasi.dari - 1], [langkah[variasi.dari - 1].san])[0] : null;
+    var dasar = sebelum ? "langkah " + sebelum.nomor + " " + sebelum.san : "posisi awal";
     judul.appendChild(buat("strong", null, "Variasi "));
     judul.appendChild(buat("span", "redup kecil", "dari " + dasar + ": "));
     var baris = buat("span", "variasi-langkah");
@@ -502,6 +360,9 @@
   function saatJatuhPartai(source, target) {
     if (source === target) return "snapback";
     hentikanAuto();
+    if (PilihPromosi.tunda(permainanSaatIni(), source, target, function (p) {
+      mainkanVariasi(source, target, p);
+    })) return "snapback";
     return mainkanVariasi(source, target) ? undefined : "snapback";
   }
 
@@ -524,6 +385,11 @@
     }
     if (sq === terpilih) { klik.hapusSorot(); terpilih = null; return; }
     hentikanAuto();
+    var dari = terpilih;
+    if (PilihPromosi.tunda(g, dari, sq, function (p) { mainkanVariasi(dari, sq, p); })) {
+      klik.hapusSorot(); terpilih = null;
+      return;
+    }
     if (mainkanVariasi(terpilih, sq)) return;
     if (bidak && bidak.color === g.turn()) pilihKotakPartai(sq);
     else { klik.hapusSorot(); terpilih = null; }
@@ -545,21 +411,6 @@
     grafik: document.getElementById("grafik"),
     ringkasan: document.getElementById("ringkasan-analisis")
   };
-
-  /* Peluang menang 0..1 dari centipawn, rumus Lichess. Sama dengan yang
-     dipakai backend supaya eval bar dan akurasi konsisten. */
-  function peluangMenang(cp) {
-    var c = Math.max(-1000, Math.min(1000, cp));
-    return 0.5 + 0.5 * (2 / (1 + Math.exp(-0.00368208 * c)) - 1);
-  }
-
-  function formatEval(cp, mat) {
-    if (mat !== null && mat !== undefined) {
-      if (mat === 0) return "#";
-      return (mat > 0 ? "M" : "-M") + Math.abs(mat);
-    }
-    return (cp >= 0 ? "+" : "") + (cp / 100).toFixed(2).replace(".", ",");
-  }
 
   /* Baris analisis untuk titik indeks i (i = ply + 1). i = 0 -> posisi awal. */
   function langkahAnalisis(i) {
@@ -586,31 +437,7 @@
 
   function perbaruiKomentar() {
     if (!analisis) return;
-    var la = langkahAnalisis(indeks);
-    elA.komentar.textContent = "";
-    if (!la) {
-      elA.komentar.appendChild(teks("Posisi awal. Tekan → untuk mulai."));
-      return;
-    }
-    var judul = buat("div");
-    var tandaTeks = TANDA[la.klasifikasi] || "";
-    judul.appendChild(buat("span", "klas-" + la.klasifikasi,
-      (la.warna === "putih" ? la.nomor_langkah + ". " : la.nomor_langkah + "... ") +
-      la.san + tandaTeks + "  "));
-    judul.appendChild(buat("span", null, NAMA_KLAS[la.klasifikasi] || la.klasifikasi));
-    if (la.kehilangan_cp > 0 && la.klasifikasi !== "buku") {
-      judul.appendChild(buat("span", "redup", "  (−" + la.kehilangan_cp + " cp)"));
-    }
-    elA.komentar.appendChild(judul);
-
-    if (la.langkah_terbaik_san && la.langkah_terbaik_san !== la.san && la.klasifikasi !== "buku") {
-      var v = buat("div", "variasi");
-      v.appendChild(buat("strong", null, "Seharusnya " + la.langkah_terbaik_san));
-      if (la.variasi_terbaik && la.variasi_terbaik.length > 1) {
-        v.appendChild(teks("  →  " + la.variasi_terbaik.join(" ")));
-      }
-      elA.komentar.appendChild(v);
-    }
+    RingkasanAnalisis.komentar(elA.komentar, langkahAnalisis(indeks));
   }
 
   function sorotKotak() {
@@ -633,280 +460,11 @@
     perbaruiEvalBar();
     perbaruiKomentar();
     sorotKotak();
-    gambarPenandaGrafik();
+    GrafikPartai.penandaEval(indeks);
   }
 
   function hiasDaftarLangkah() {
-    var semua = el.daftar.querySelectorAll(".langkah");
-    for (var i = 0; i < semua.length; i++) {
-      var la = langkahAnalisis(parseInt(semua[i].dataset.indeks, 10));
-      if (!la) continue;
-      if (TANDA[la.klasifikasi]) {
-        semua[i].classList.add("klas-" + la.klasifikasi);
-        semua[i].appendChild(buat("span", "tanda", TANDA[la.klasifikasi]));
-      }
-      semua[i].title = (NAMA_KLAS[la.klasifikasi] || "") +
-        (la.kehilangan_cp ? " (−" + la.kehilangan_cp + " cp)" : "");
-    }
-  }
-
-  /* ---------- grafik jam (dari komentar %clk di PGN) ----------
-     Sisa waktu Putih dan Hitam setelah tiap langkah. Garis merah = 10 detik,
-     batas zeitnot yang dipakai halaman kekalahan. Tidak tampil kalau PGN
-     tidak punya jam (mis. partai TWIC). */
-
-  var elJam = { kartu: document.getElementById("jam-kartu"), grafik: document.getElementById("grafik-jam"), ket: document.getElementById("jam-ket") };
-  var jamPly = [];        // detik setelah ply i (indeks 0 = setelah langkah pertama)
-  var ZEITNOT = 10;
-
-  function bacaJam(pgn) {
-    var badan = pgn.replace(/\[(\w+) "([^"]*)"\]\s*/g, "");
-    var re = /\{[^}]*%clk\s+(\d+):(\d\d):(\d\d(?:\.\d+)?)[^}]*\}/g, m, hasil = [];
-    while ((m = re.exec(badan)) !== null) hasil.push(parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseFloat(m[3]));
-    return hasil;
-  }
-
-  function formatDetik(d) {
-    if (d >= 60) return Math.floor(d / 60) + ":" + ("0" + Math.floor(d % 60)).slice(-2);
-    return (Math.round(d * 10) / 10) + " s";
-  }
-
-  function gambarGrafikJam(g) {
-    if (!elJam.kartu) return;
-    jamPly = bacaJam(g.pgn || "");
-    if (jamPly.length < 4) return;
-    var awal = parseInt(String(g.kontrol_waktu || "").split("+")[0], 10);
-    var maks = Math.max(isNaN(awal) ? 0 : awal, Math.max.apply(null, jamPly));
-    if (!maks) return;
-    var T = 80, L = 600, n = jamPly.length;
-    var x = function (i) { return ((i + 1) / n) * L; };
-    var y = function (d) { return T - 4 - (Math.max(0, Math.min(maks, d)) / maks) * (T - 8); };
-    var svg = elJam.grafik;
-    svg.textContent = "";
-    svg.appendChild(svgEl("rect", { x: 0, y: 0, width: L, height: T, fill: "#fafaf8" }));
-    if (maks > 60) svg.appendChild(svgEl("line", { x1: 0, y1: y(ZEITNOT), x2: L, y2: y(ZEITNOT), stroke: "#b3261e", "stroke-width": "0.8", "stroke-dasharray": "3,3" }));
-    [["putih", "#8a8a85"], ["hitam", "#2f2f2f"]].forEach(function (sisi, k) {
-      var titik = [];
-      for (var i = k; i < n; i += 2) titik.push(x(i) + "," + y(jamPly[i]));
-      svg.appendChild(svgEl("polyline", { points: titik.join(" "), fill: "none", stroke: sisi[1], "stroke-width": "1.4" }));
-    });
-    svg.appendChild(svgEl("line", { id: "penanda-jam", x1: 0, y1: 0, x2: 0, y2: T, stroke: "#2f6f4f", "stroke-width": "1.5" }));
-    svg.onclick = function (ev) {
-      var kotak = svg.getBoundingClientRect();
-      hentikanAuto();
-      keIndeks(Math.round(((ev.clientX - kotak.left) / kotak.width) * n));
-    };
-
-    /* keterangan: langkah pertama masing-masing pihak masuk zeitnot */
-    var ket = [];
-    [["Putih", 0], ["Hitam", 1]].forEach(function (s) {
-      var pertama = null;
-      for (var i = s[1]; i < n; i += 2) { if (jamPly[i] < ZEITNOT) { pertama = i; break; } }
-      ket.push(s[0] + ": " + (pertama === null ? "tidak pernah < 10 s" : "< 10 s sejak langkah " + (Math.floor(pertama / 2) + 1)) +
-        " · akhir " + formatDetik(jamPly[n - 1 - ((n - 1 - s[1]) % 2)]));
-    });
-    elJam.ket.textContent = ket.join("   ·   ");
-    elJam.kartu.hidden = false;
-  }
-
-  function gambarPenandaJam() {
-    var p = document.getElementById("penanda-jam");
-    if (!p || !jamPly.length) return;
-    var xx = (indeks / jamPly.length) * 600;
-    p.setAttribute("x1", xx); p.setAttribute("x2", xx);
-    if (elJam.ket && indeks > 0 && jamPly[indeks - 1] !== undefined) {
-      elJam.ket.title = "Setelah langkah ini: " + formatDetik(jamPly[indeks - 1]) + " tersisa";
-    }
-  }
-
-  /* ---------- grafik evaluasi (SVG inline, tanpa library) ---------- */
-
-  var LEBAR = 600, TINGGI = 120, BATAS = 1000;
-
-  function yDariCp(cp, mat) {
-    var v = cp;
-    if (mat !== null && mat !== undefined) v = mat === 0 ? cp : (mat > 0 ? BATAS : -BATAS);
-    v = Math.max(-BATAS, Math.min(BATAS, v));
-    return TINGGI / 2 - (v / BATAS) * (TINGGI / 2 - 4);
-  }
-
-  function svgEl(tag, atribut) {
-    var e = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (var k in atribut) e.setAttribute(k, atribut[k]);
-    return e;
-  }
-
-  function gambarGrafik() {
-    var g = elA.grafik;
-    g.textContent = "";
-    var n = analisis.langkah.length;
-    if (n === 0) return;
-
-    var xDari = function (i) { return (i / n) * LEBAR; };
-
-    /* latar: atas = Putih unggul, bawah = Hitam unggul */
-    g.appendChild(svgEl("rect", { x: 0, y: 0, width: LEBAR, height: TINGGI / 2, fill: "#f4f4f2" }));
-    g.appendChild(svgEl("rect", { x: 0, y: TINGGI / 2, width: LEBAR, height: TINGGI / 2, fill: "#3a3a3a" }));
-
-    var titik = ["0," + yDariCp(analisis.langkah[0].eval_sebelum_cp * (analisis.langkah[0].warna === "putih" ? 1 : -1), null)];
-    for (var i = 0; i < n; i++) {
-      var la = analisis.langkah[i];
-      titik.push(xDari(i + 1) + "," + yDariCp(la.eval_putih_cp, la.mat_sesudah));
-    }
-    var area = svgEl("polygon", {
-      points: "0," + TINGGI + " " + titik.join(" ") + " " + LEBAR + "," + TINGGI,
-      fill: "#e8e8e4", opacity: "0.9"
-    });
-    g.appendChild(area);
-    g.appendChild(svgEl("polyline", { points: titik.join(" "), fill: "none", stroke: "#6b6b6b", "stroke-width": "1.2" }));
-    g.appendChild(svgEl("line", { x1: 0, y1: TINGGI / 2, x2: LEBAR, y2: TINGGI / 2, stroke: "#999", "stroke-width": "0.6" }));
-
-    for (var j = 0; j < n; j++) {
-      var lb = analisis.langkah[j];
-      if (lb.klasifikasi === "blunder" || lb.klasifikasi === "mistake") {
-        g.appendChild(svgEl("circle", {
-          cx: xDari(j + 1), cy: yDariCp(lb.eval_putih_cp, lb.mat_sesudah), r: 3,
-          fill: lb.klasifikasi === "blunder" ? "#b3261e" : "#c2620b"
-        }));
-      }
-    }
-    if (analisis.turning_point_ply !== null && analisis.turning_point_ply !== undefined) {
-      var xt = xDari(analisis.turning_point_ply + 1);
-      g.appendChild(svgEl("line", { x1: xt, y1: 0, x2: xt, y2: TINGGI, stroke: "#b3261e", "stroke-width": "1", "stroke-dasharray": "3,3" }));
-    }
-    g.appendChild(svgEl("line", { id: "penanda-grafik", x1: 0, y1: 0, x2: 0, y2: TINGGI, stroke: "#2f6f4f", "stroke-width": "1.5" }));
-
-    g.onclick = function (ev) {
-      var kotak = g.getBoundingClientRect();
-      var i = Math.round(((ev.clientX - kotak.left) / kotak.width) * n);
-      hentikanAuto();
-      keIndeks(i);
-    };
-    elA.grafikKartu.hidden = false;
-  }
-
-  function gambarPenandaGrafik() {
-    var p = document.getElementById("penanda-grafik");
-    if (!p || !analisis) return;
-    var x = (indeks / analisis.langkah.length) * LEBAR;
-    p.setAttribute("x1", x); p.setAttribute("x2", x);
-  }
-
-  /* Ayunan peluang menang terbesar (dari sudut pandang pihak yang jalan),
-     paling banyak lima, diurutkan menurut nomor langkah. Ambang 10 poin
-     supaya ketidakakuratan kecil tidak ikut. */
-  function momenKritis() {
-    var daftar = [];
-    analisis.langkah.forEach(function (l) {
-      if (l.eval_sebelum_cp === null || l.eval_sebelum_cp === undefined) return;
-      var sesudah = l.eval_sesudah_cp;
-      if ((sesudah === null || sesudah === undefined) && l.mat_sesudah !== null && l.mat_sesudah !== undefined) {
-        sesudah = l.mat_sesudah > 0 ? 1000 : -1000;
-      }
-      if (sesudah === null || sesudah === undefined) return;
-      var turun = peluangMenang(l.eval_sebelum_cp) - peluangMenang(sesudah);
-      /* Blunder selalu masuk walau ayunannya kecil (mis. posisi sudah kalah). */
-      if (turun >= 0.10 || l.klasifikasi === "blunder") daftar.push({ l: l, turun: turun });
-    });
-    daftar.sort(function (a, b) { return b.turun - a.turun; });
-    return daftar.slice(0, 5).sort(function (a, b) { return a.l.ply - b.l.ply; });
-  }
-
-  function gambarMomenKritis(r) {
-    var momen = momenKritis();
-    if (!momen.length) return;
-    var judul = buat("div", null);
-    judul.style.marginTop = "10px";
-    judul.appendChild(buat("strong", null, "Momen kritis"));
-    judul.appendChild(buat("span", "redup kecil", "  penurunan peluang menang pihak yang jalan"));
-    var latih = document.createElement("a");
-    latih.href = "/static/latihan.html?partai_id=" + analisis.partai_id;
-    latih.className = "kecil";
-    latih.style.marginLeft = "10px";
-    latih.title = "Latihan: temukan langkah terbaik di posisi-posisi kesalahan partai ini";
-    latih.appendChild(teks("latih →"));
-    judul.appendChild(latih);
-    r.appendChild(judul);
-    var wadah = buat("div", "momen-daftar");
-    momen.forEach(function (m) {
-      var l = m.l;
-      var baris = buat("div", "momen-baris");
-      baris.title = "Lompat ke langkah ini";
-      baris.appendChild(buat("span", "turun", "−" + Math.round(100 * m.turun) + "%"));
-      baris.appendChild(buat("span", "langkah klas-" + l.klasifikasi,
-        (l.warna === "putih" ? l.nomor_langkah + "." : l.nomor_langkah + "…") + l.san + (TANDA[l.klasifikasi] || "")));
-      if (l.langkah_terbaik_san && l.langkah_terbaik_san !== l.san) {
-        baris.appendChild(buat("span", "redup", "seharusnya " + l.langkah_terbaik_san));
-      }
-      baris.addEventListener("click", function () { hentikanAuto(); keIndeks(l.ply + 1); });
-      wadah.appendChild(baris);
-    });
-    r.appendChild(wadah);
-  }
-
-  function gambarRingkasanAnalisis(g) {
-    var r = elA.ringkasan;
-    r.textContent = "";
-    /* Hasil Lichess tidak punya depth (disimpan 0); menulis "depth 0" menyesatkan. */
-    r.appendChild(buat("h2", null, "Analisis " + analisis.engine +
-      (analisis.depth ? " · depth " + analisis.depth : "")));
-
-    /* Analisis kasar (profil cepat, atau dari Lichess) boleh diulang dengan
-       teliti. Tanpa tautan ini tombol "Analisa partai ini" hilang begitu
-       partainya sudah dianalisis, jadi rencana Ray "dianalisa dulu, nanti
-       dianalisis ulang" tidak punya jalan dari halaman partai. */
-    if (analisis.profil === "cepat" || analisis.profil === "lichess") {
-      var ulang = document.createElement("div");
-      ulang.className = "kecil redup";
-      ulang.style.margin = "-4px 0 8px";
-      ulang.appendChild(document.createTextNode(analisis.profil === "cepat"
-        ? "Dianalisis cepat (depth 10): akurasi mirip, label blunder kurang teliti. "
-        : "Dianalisis Lichess: nilainya sedikit berbeda dari engine laptop. "));
-      var a = document.createElement("a");
-      a.href = "/static/mesin.html?kelompok=id&id=" + g.id + "&ulang=1&profil=hemat";
-      a.appendChild(document.createTextNode("Analisa ulang lebih teliti →"));
-      ulang.appendChild(a);
-      r.appendChild(ulang);
-    }
-
-    var kotak = buat("div", "akurasi-kotak");
-    [["putih", g.putih, analisis.akurasi_putih, analisis.blunder_putih, analisis.mistake_putih, analisis.inaccuracy_putih],
-     ["hitam", g.hitam, analisis.akurasi_hitam, analisis.blunder_hitam, analisis.mistake_hitam, analisis.inaccuracy_hitam]
-    ].forEach(function (s) {
-      var k = buat("div");
-      k.appendChild(buat("div", "label", s[1]));
-      k.appendChild(buat("div", "angka-besar", s[2] !== null ? s[2].toFixed(1).replace(".", ",") + "%" : "—"));
-      var rinci = buat("div", "kecil");
-      rinci.appendChild(buat("span", "klas-blunder", "?? " + s[3] + "  "));
-      rinci.appendChild(buat("span", "klas-mistake", "? " + s[4] + "  "));
-      rinci.appendChild(buat("span", "klas-inaccuracy", "?! " + s[5]));
-      k.appendChild(rinci);
-      kotak.appendChild(k);
-    });
-    r.appendChild(kotak);
-
-    if (analisis.turning_point_ply !== null && analisis.turning_point_ply !== undefined) {
-      var tp = analisis.langkah[analisis.turning_point_ply];
-      if (tp) {
-        var t = buat("div", null);
-        t.style.marginTop = "10px";
-        t.appendChild(buat("strong", null, "Titik balik: "));
-        var tautan = buat("span", "langkah klas-" + tp.klasifikasi,
-          (tp.warna === "putih" ? tp.nomor_langkah + "." : tp.nomor_langkah + "...") + tp.san + (TANDA[tp.klasifikasi] || ""));
-        tautan.addEventListener("click", function () { hentikanAuto(); keIndeks(tp.ply + 1); });
-        t.appendChild(tautan);
-        if (tp.langkah_terbaik_san && tp.langkah_terbaik_san !== tp.san) {
-          t.appendChild(buat("span", "redup", "  seharusnya " + tp.langkah_terbaik_san));
-        }
-        r.appendChild(t);
-      }
-    } else {
-      var s0 = buat("div", "redup kecil", "Tidak ada titik balik yang jelas — partainya berjalan stabil.");
-      s0.style.marginTop = "10px";
-      r.appendChild(s0);
-    }
-    gambarMomenKritis(r);
-    r.hidden = false;
+    RingkasanAnalisis.hiasDaftar(el.daftar, langkahAnalisis);
   }
 
   function muatAnalisis(g) {
@@ -921,35 +479,22 @@
         elA.bar.hidden = false;
         elA.komentar.hidden = false;
         hiasDaftarLangkah();
-        gambarGrafik();
-        gambarRingkasanAnalisis(g);
+        GrafikPartai.gambarEval(analisis, klikGrafik);
+        RingkasanAnalisis.gambar(elA.ringkasan, analisis, g, lompat);
         perbaruiAnalisisTampilan();
       })
-      .catch(function (e) {
-        var r = elA.ringkasan;
-        r.textContent = "";
-        if (e && e.belum) {
-          r.appendChild(buat("h2", null, "Belum dianalisis"));
-          /* Tombol lebih dulu daripada perintah terminal: nomor partai tidak
-             perlu diketik sendiri, halaman Mesin menerimanya lewat ?id= */
-          var tombol = document.createElement("a");
-          tombol.className = "tombol-analisa";
-          tombol.href = "/static/mesin.html?kelompok=id&id=" + g.id;
-          tombol.appendChild(document.createTextNode("Analisa partai ini dengan engine →"));
-          r.appendChild(tombol);
-          r.appendChild(buat("div", "kecil redup",
-            "Satu partai kira-kira satu menit (profil hemat). Atau lewat terminal:"));
-          var kode = buat("pre", "eval-fen", e.detail && e.detail.perintah ? e.detail.perintah : "python analisis_partai.py --id " + g.id);
-          kode.style.borderTop = "none";
-          r.appendChild(kode);
-        } else {
-          r.appendChild(buat("div", "redup kecil", "Analisis tidak bisa dimuat: " + (e.message || e)));
-        }
-        r.hidden = false;
-      });
+      .catch(function (e) { RingkasanAnalisis.gambarBelum(elA.ringkasan, g, e); });
   }
 
   /* ---------- autoplay ---------- */
+
+  /* Klik di grafik mana pun = pindah ke langkah itu dan berhenti autoplay.
+     Disuntik ke GrafikPartai supaya modul grafik tidak perlu tahu apa-apa
+     soal autoplay maupun navigasi langkah. */
+  function klikGrafik(i) {
+    hentikanAuto();
+    keIndeks(i);
+  }
 
   function hentikanAuto() {
     if (timerAuto) {
@@ -966,150 +511,6 @@
     timerAuto = setInterval(function () { keIndeks(indeks + 1); }, 800);
   }
 
-  /* ---------- info partai ---------- */
-
-  function namaLengkap(nama, gelar, elo, terverifikasi, pemainId) {
-    var f = document.createDocumentFragment();
-    if (gelar) f.appendChild(buat("span", "gelar", gelar));
-    if (pemainId) {
-      var a = document.createElement("a");
-      a.href = "/pemain/" + pemainId;
-      a.appendChild(teks(nama));
-      f.appendChild(a);
-    } else {
-      f.appendChild(teks(nama));
-    }
-    if (terverifikasi) {
-      var v = buat("span", "tercentang", " ✓");
-      v.title = "Identitas dipastikan lewat FIDE ID";
-      f.appendChild(v);
-    }
-    if (elo) f.appendChild(buat("span", "redup mono", " (" + elo + ")"));
-    return f;
-  }
-
-  function gambarInfo(g) {
-    el.info.textContent = "";
-
-    /* Kepala pertandingan: Putih · hasil · Hitam, seperti papan skor turnamen. */
-    var laga = buat("div", "laga");
-    function sisi(nama, gelar, elo, terverifikasi, id, warna) {
-      var s = buat("div", "laga-sisi " + warna);
-      var n = buat("div", "laga-nama");
-      n.appendChild(namaLengkap(nama, gelar, null, terverifikasi, id));
-      s.appendChild(n);
-      s.appendChild(buat("div", "kecil redup", (warna === "putih" ? "Putih" : "Hitam") + (elo ? " · " + elo : "")));
-      return s;
-    }
-    laga.appendChild(sisi(g.putih, g.putih_gelar, g.elo_putih, g.putih_terverifikasi, g.putih_id, "putih"));
-    var hasil = buat("div", "laga-hasil hasil " +
-      (g.hasil === "1-0" ? "hasil-1-0" :
-       g.hasil === "0-1" ? "hasil-0-1" :
-       g.hasil === "*" ? "hasil-jalan" : "hasil-remis"),
-      g.hasil === "*" ? "…" : g.hasil === "1/2-1/2" ? "½–½" : g.hasil.replace("-", "–"));
-    hasil.title = g.hasil === "*" ? "sedang berjalan" : "hasil " + g.hasil;
-    laga.appendChild(hasil);
-    laga.appendChild(sisi(g.hitam, g.hitam_gelar, g.elo_hitam, g.hitam_terverifikasi, g.hitam_id, "hitam"));
-    el.info.appendChild(laga);
-
-    var dl = document.createElement("dl");
-    function baris(label, nilai, tautan) {
-      if (!nilai) return;
-      dl.appendChild(buat("dt", null, label));
-      var dd = document.createElement("dd");
-      if (tautan) {
-        var a = document.createElement("a");
-        a.href = nilai; a.target = "_blank"; a.rel = "noopener noreferrer";
-        a.appendChild(teks("buka sumber"));
-        dd.appendChild(a);
-      } else {
-        dd.appendChild(teks(nilai));
-      }
-      dl.appendChild(dd);
-    }
-    baris("Turnamen", g.turnamen);
-    baris("Tanggal", g.tanggal);
-    baris("Babak", g.babak);
-    baris("Pembukaan", [g.eco, g.pembukaan].filter(Boolean).join(" — "));
-    baris("Kontrol waktu", AlatCatur.kontrolPartai(g));
-    baris("Jumlah langkah", g.jumlah_langkah);
-    baris("Sumber", g.sumber);
-    baris("Tautan", g.sumber_url, true);
-    el.info.appendChild(dl);
-  }
-
-  /* ---------- navigasi partai sebelumnya/berikutnya dalam daftar ----------
-     Halaman daftar mengirim saringannya lewat ?daftar=<query /api/partai>.
-     Halaman ini memuat ulang daftar itu untuk menemukan tetangga partai
-     sekarang; di tepi halaman, halaman sebelah ikut diambil. Tidak butuh
-     endpoint baru, dan tanpa parameter itu kartu navigasi tetap tersembunyi. */
-
-  var elN = document.getElementById("navigasi-daftar");
-  var tetangga = { sebelum: null, sesudah: null };
-
-  function urlPartai(id, q) { return "/partai/" + id + "?daftar=" + encodeURIComponent(q.toString()); }
-
-  function ambilDaftar(q) {
-    return fetch("/api/partai?" + q.toString()).then(function (r) { return r.ok ? r.json() : null; });
-  }
-
-  function halamanTepi(q, halaman, ujung) {
-    if (halaman < 1) return Promise.resolve(null);
-    var q2 = new URLSearchParams(q.toString());
-    q2.set("halaman", halaman);
-    return ambilDaftar(q2).then(function (d) {
-      if (!d || d.partai.length === 0) return null;
-      var g = ujung === "awal" ? d.partai[0] : d.partai[d.partai.length - 1];
-      return { id: g.id, q: q2 };
-    });
-  }
-
-  function siapkanNavigasi(idSekarang) {
-    var qs = new URLSearchParams(window.location.search).get("daftar");
-    if (!qs || !elN) return;
-    var q = new URLSearchParams(qs);
-    var halaman = parseInt(q.get("halaman") || "1", 10);
-    ambilDaftar(q).then(function (d) {
-      if (!d) return;
-      var ids = d.partai.map(function (g) { return g.id; });
-      var i = ids.indexOf(idSekarang);
-      if (i === -1) return;   // daftar berubah sejak diklik; tanpa navigasi
-      var nomor = (d.halaman - 1) * d.per_halaman + i + 1;
-      var sebelum = i > 0 ? Promise.resolve({ id: ids[i - 1], q: q }) : halamanTepi(q, halaman - 1, "akhir");
-      var sesudah = i < ids.length - 1 ? Promise.resolve({ id: ids[i + 1], q: q })
-                  : (halaman < d.jumlah_halaman ? halamanTepi(q, halaman + 1, "awal") : Promise.resolve(null));
-      return Promise.all([sebelum, sesudah]).then(function (t) {
-        tetangga.sebelum = t[0];
-        tetangga.sesudah = t[1];
-        gambarNavigasi(q, nomor, d.total);
-      });
-    }).catch(function () { /* navigasi opsional */ });
-  }
-
-  function gambarNavigasi(q, nomor, total) {
-    elN.textContent = "";
-    function tautan(label, t, judul) {
-      var a = document.createElement("a");
-      a.appendChild(teks(label));
-      if (t) { a.href = urlPartai(t.id, t.q); a.title = judul; } else { a.className = "redup"; }
-      return a;
-    }
-    var kembali = new URLSearchParams(q.toString());
-    kembali.delete("per_halaman");
-    if (kembali.get("halaman") === "1") kembali.delete("halaman");
-    var ak = document.createElement("a");
-    ak.href = "/?" + kembali.toString();
-    ak.appendChild(teks("kembali ke daftar · partai " + nomor.toLocaleString("id-ID") + " dari " + total.toLocaleString("id-ID")));
-    elN.appendChild(tautan("‹ sebelumnya", tetangga.sebelum, "Partai sebelumnya dalam daftar (P)"));
-    elN.appendChild(teks("   "));
-    elN.appendChild(ak);
-    elN.appendChild(teks("   "));
-    elN.appendChild(tautan("berikutnya ›", tetangga.sesudah, "Partai berikutnya dalam daftar (N)"));
-    elN.hidden = false;
-  }
-
-  function keTetangga(t) { if (t) window.location.href = urlPartai(t.id, t.q); }
-
   /* ---------- mulai ---------- */
 
   fetch("/api/partai/" + idDariUrl())
@@ -1120,8 +521,8 @@
     })
     .then(function (g) {
       document.title = g.putih + " vs " + g.hitam + " — McLung ChessBase";
-      gambarInfo(g);
-      siapkanNavigasi(g.id);
+      InfoPartai.gambar(el.info, g);
+      NavigasiPartai.siapkan(g.id);
 
       if (!siapkanPosisi(g.pgn)) {
         tampilkanGalat("PGN partai ini tidak bisa dibaca, jadi papan tidak " +
@@ -1147,7 +548,7 @@
       }
 
       gambarDaftarLangkah();
-      gambarGrafikJam(g);
+      GrafikPartai.gambarJam(g, klikGrafik);
       keIndeks(0);
       muatAnalisis(g);
       cariKeluarTeori(g);
@@ -1176,6 +577,9 @@
 
   document.addEventListener("keydown", function (ev) {
     if (ev.target.tagName === "INPUT" || !papan) return;
+    /* Ctrl+P (cetak), Ctrl+F (cari), Alt+←: milik peramban, bukan pintasan
+       halaman ini (audit 27 Sep 2026). */
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     var tangani = true;
     switch (ev.key) {
       case "ArrowLeft":  hentikanAuto(); if (variasi) undoVariasi(); else keIndeks(indeks - 1); break;
@@ -1184,8 +588,8 @@
       case "Home":       hentikanAuto(); keIndeks(0); break;
       case "End":        hentikanAuto(); keIndeks(posisi.length - 1); break;
       case "f": case "F": papan.flip(); break;
-      case "n": case "N": keTetangga(tetangga.sesudah); break;
-      case "p": case "P": keTetangga(tetangga.sebelum); break;
+      case "n": case "N": NavigasiPartai.keBerikutnya(); break;
+      case "p": case "P": NavigasiPartai.keSebelumnya(); break;
       case " ":          togglelAuto(); break;
       default: tangani = false;
     }

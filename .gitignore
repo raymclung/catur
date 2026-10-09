@@ -28,13 +28,46 @@ data/*.db.bak*
 # Berkas kunci satu-penulis (app/kunci_penulis.py)
 data/.penulis.lock
 data/.penulis.info
+data/.peluncuran.lock
 
 # Catatan tugas analisa yang diluncurkan halaman Mesin (PID + jalur log lokal;
 # turunan, hanya berarti di mesin ini).
 data/tugas-analisa.json
+
+# Log jalannya perintah (turunan; dibuat ulang dengan menjalankan ulang).
+# Beberapa log lama sengaja ter-track sebagai bukti dan tetap disimpan.
+data/laporan/log-*.txt
+# catatan kemajuan batch engine: turunan, satu berkas per pid yang hidup
+data/laporan/.kemajuan-*.json
 
 # Antrean analisis (PID + jalur lokal; turunan, hanya berarti di mesin ini).
 data/antrean-analisa.json
 
 # Pengaturan lokal mesin ini (batas CPU engine).
 data/pengaturan-mesin.json
+
+# Status pembaruan partai GM terkenal (app/impor_web.py, impor_broadcast.py)
+data/pembaruan-broadcast.json
+data/proses-broadcast-mingguan.json
+
+# Status pembantu lintas proses (app/pembantu.py)
+data/pembantu-status.json
+
+# cache jawaban API FIDE/Lichess yang dipakai rapikan_nama.py: turunan,
+# bisa dibangun ulang, dan 500 KB di antaranya hanya URL foto.
+data/cache-fide.json
+
+# Cache nama turnamen per slug siaran (rapikan_turnamen.py). Turunan dari API
+# Lichess, dibuat ulang sendiri; hanya ada supaya tidak menembak API dua kali.
+data/nama-turnamen-slug.json
+
+# Laporan pemetaan rapikan_turnamen.py (jejak migrasi, bisa besar)
+data/laporan/rapikan-turnamen-*.json
+
+# Kunci, sisa tulis atomik, dan salinan isi rusak dari app/berkas_json.py
+data/*.lock
+data/*.tmp
+data/*.rusak-*
+
+# Klaim "partai ini sedang dianalisis" (analisis_partai.py), sementara
+data/klaim-analisis/

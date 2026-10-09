@@ -71,10 +71,23 @@
     /* Saringan format dikerjakan server (kolom `format`, Permintaan API #8),
        jadi halaman ini tidak perlu mengambil detail tiap partai lagi. */
     var f = el.format.value !== "semua" ? "&format=" + el.format.value : "";
-    return ambil("/api/partai?pemain_id=" + akun.id + "&dianalisis=true&per_halaman=100&urut=terbaru" + f).then(function (d) {
-      return d.partai.map(function (g) { return { g: g, warna: g.putih_id === akun.id ? "putih" : "hitam", akun: akun }; })
-        .filter(function (x) { return lolosLawan(x.g, x.warna); }).slice(0, batas);
-    });
+    /* /api/partai memberi paling banyak 100 per halaman, dan saringan lawan
+       baru diterapkan di sini: satu halaman membuat "300 terbaru" berhenti di
+       100, bahkan kurang setelah lawan disaring (audit 27 Sep 2026). Halaman
+       berikutnya diambil sampai cukup atau partainya habis. */
+    var hasil = [];
+    function halaman(h) {
+      return ambil("/api/partai?pemain_id=" + akun.id + "&dianalisis=true&per_halaman=100&urut=terbaru" +
+                   "&halaman=" + h + f).then(function (d) {
+        d.partai.forEach(function (g) {
+          var x = { g: g, warna: g.putih_id === akun.id ? "putih" : "hitam", akun: akun };
+          if (lolosLawan(x.g, x.warna)) hasil.push(x);
+        });
+        var habis = !d.partai.length || h * 100 >= (d.total || 0);
+        return hasil.length >= batas || habis ? hasil.slice(0, batas) : halaman(h + 1);
+      });
+    }
+    return halaman(1);
   }
 
   function muat() {
@@ -195,7 +208,7 @@
 
   var q = new URLSearchParams(window.location.search);
   ["lawan", "format", "batas"].forEach(function (k) {
-    if (q.get(k) && el[k].querySelector('option[value="' + q.get(k) + '"]')) el[k].value = q.get(k);
+    if (q.get(k) && el[k].querySelector('option[value="' + CSS.escape(q.get(k)) + '"]')) el[k].value = q.get(k);
   });
 
   AkunPribadi.muat().then(function (akun) {
@@ -206,7 +219,7 @@
     akun.forEach(function (p) {
       var o = document.createElement("option"); o.value = p.id; o.textContent = p.nama + (p.sumber ? " · " + p.sumber : ""); el.akun.appendChild(o);
     });
-    if (q.get("akun") && el.akun.querySelector('option[value="' + q.get("akun") + '"]')) el.akun.value = q.get("akun");
+    if (q.get("akun") && el.akun.querySelector('option[value="' + CSS.escape(q.get("akun")) + '"]')) el.akun.value = q.get("akun");
     if (!akun.length) throw new Error("Tidak ada akun pribadi di database.");
     muat();
   }).catch(function (e) { galat(e.message); });

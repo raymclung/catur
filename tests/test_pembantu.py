@@ -15,6 +15,8 @@ Engine browser sendiri tidak diuji di sini (butuh browser); hasilnya
 dipalsukan dalam bentuk yang persis dikirim pembantu.js.
 """
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -113,6 +115,24 @@ class Akses(unittest.TestCase):
         self.assertEqual(minta("/static/mesin.html", "127.0.0.1", [(b"x-forwarded-for", b"203.0.113.9")]), 403)
         self.assertIn(minta("/pembantu", "127.0.0.1", tunnel), (302, 307))
 
+    def test_mode_pembantu_menutup_semuanya_kecuali_jalur_pembantu(self):
+        """
+        Audit 21 Sep 2026: penjagaan lama fail-open — aman hanya selama tunnel
+        mengirim header proxy. Server yang ditunnel sekarang dijalankan dengan
+        CATUR_MODE=pembantu dan menolak jalur lain dari SIAPA PUN, termasuk
+        127.0.0.1 tanpa header apa pun.
+        """
+        import os
+        with mock.patch.dict(os.environ, {pb.ENV_MODE: "pembantu"}):
+            self.assertTrue(pb.mode_pembantu_saja())
+            for jalur in ("/api/statistik", "/api/impor/akun", "/api/analisa/hentikan",
+                          "/api/pembantu/info", "/api/pembantu/kode", "/static/mesin.html", "/"):
+                self.assertFalse(pb.boleh_dari_luar("127.0.0.1", jalur), jalur)
+            for jalur in ("/pembantu", "/api/pembantu/ambil", "/api/pembantu/kirim",
+                          "/static/pembantu.js", "/pembantu/engine/stockfish-18-lite-single.wasm"):
+                self.assertTrue(pb.boleh_dari_luar("127.0.0.1", jalur), jalur)
+        self.assertFalse(pb.mode_pembantu_saja())        # bawaannya penuh lagi
+
     def test_proxy_tidak_dianggap_laptop(self):
         self.assertFalse(pb.boleh_dari_luar("127.0.0.1", "/api/impor/akun", lewat_proxy=True))
         self.assertTrue(pb.boleh_dari_luar("127.0.0.1", "/api/pembantu/ambil", lewat_proxy=True))
@@ -208,6 +228,7 @@ class AlurApi(unittest.TestCase):
         pb._sewa.clear()
         pb._perangkat.clear()
         pb._ditolak.clear()
+        pb._antrean.clear()
         pb._gagal.clear()
         self.kode = pb.baca_kode()
         self.conn = koneksi(self.db)
@@ -219,6 +240,7 @@ class AlurApi(unittest.TestCase):
         pb._sewa.clear()
         pb._perangkat.clear()
         pb._ditolak.clear()
+        pb._antrean.clear()
         self.tmp.cleanup()
 
     def ambil(self, nama="Tablet", dukung960=True):
@@ -260,6 +282,24 @@ class AlurApi(unittest.TestCase):
         pb.api_lepas(pb.Lepas(kode=self.kode, nama="Tablet", partai_id=a["partai_id"]))
         self.assertEqual(self.ambil("HP")["partai_id"], a["partai_id"])
 
+    def test_status_ditulis_ke_berkas_supaya_terlihat_proses_lain(self):
+        """
+        Server pembantu (port 8001) proses lain dari server utama, jadi kartu
+        di halaman Mesin membaca status lewat berkas ini (22 Sep 2026).
+        """
+        import json as _json
+        berkas = Path(self.tmp.name) / "pembantu-status.json"
+        with mock.patch.object(pb, "PATH_STATUS", berkas):
+            pb._status_ditulis[0] = 0.0
+            a = self.ambil("Tablet dev")
+            self.assertTrue(berkas.is_file())
+            isi = _json.loads(berkas.read_text(encoding="utf-8"))
+            self.assertIn("Tablet dev", isi["perangkat"])
+            self.assertEqual(isi["perangkat"]["Tablet dev"]["partai_id"], a["partai_id"])
+            # proses lain (yang memorinya kosong) tetap bisa membacanya
+            pb._perangkat.clear()
+            self.assertIn("Tablet dev", pb._baca_status())
+
     def test_kirim_tersimpan_dengan_tanda_pembantu(self):
         a = self.ambil()
         self.assertTrue(self.kirim(a["partai_id"], evaluasi_palsu(), 12.5)["tersimpan"])
@@ -269,6 +309,32 @@ class AlurApi(unittest.TestCase):
         self.assertEqual(len(ambil_analisis(self.conn, a["partai_id"])["langkah"]), 11)
         self.assertEqual(pb._perangkat["Tablet"]["selesai"], 1)
         self.assertNotEqual(self.ambil()["partai_id"], a["partai_id"])   # sudah dianalisis
+
+    def test_kirim_partai_milik_perangkat_lain_ditolak(self):
+        """Audit 27 Sep: /kirim dulu menerima partai id berapa pun."""
+        a = self.ambil("HP")
+        with self.assertRaises(HTTPException) as e:
+            self.kirim(a["partai_id"], evaluasi_palsu())        # dikirim atas nama "Tablet"
+        self.assertEqual(e.exception.status_code, 422)
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM analisis WHERE partai_id = ?", (a["partai_id"],)).fetchone())
+
+    def test_kirim_tidak_menimpa_analisis_yang_sudah_ada(self):
+        a = self.ambil()
+        self.kirim(a["partai_id"], evaluasi_palsu(), 3.0)
+        waktu = self.conn.execute("SELECT dianalisis_pada FROM analisis WHERE partai_id = ?",
+                                  (a["partai_id"],)).fetchone()[0]
+        with self.assertRaises(HTTPException) as e:          # tanpa sewa, sudah dianalisis
+            self.kirim(a["partai_id"], evaluasi_palsu())
+        self.assertEqual(e.exception.status_code, 422)
+        self.assertEqual(self.conn.execute("SELECT dianalisis_pada FROM analisis WHERE partai_id = ?",
+                                           (a["partai_id"],)).fetchone()[0], waktu)
+
+    def test_sewa_kedaluwarsa_masih_diterima_kalau_partai_masih_perlu(self):
+        """Tablet lambat yang melewati SEWA_DETIK tidak boleh kehilangan kerjanya."""
+        a = self.ambil()
+        pb._sewa.clear()                                    # seolah sewanya habis
+        self.assertTrue(self.kirim(a["partai_id"], evaluasi_palsu())["tersimpan"])
 
     def test_tahap_mendalam_setelah_semua_punya_analisis(self):
         # tahap 1: ketiga partai dianalisis cepat
@@ -327,10 +393,52 @@ class AlurApi(unittest.TestCase):
 
     def test_kiriman_tidak_cocok_tidak_dibagikan_lagi(self):
         a = self.ambil()
-        with self.assertRaises(HTTPException) as e:
+        # server mencatat alasan penolakan ke stderr; dibungkam supaya keluaran
+        # tes tetap bersih (audit 21 Sep 2026)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(HTTPException) as e:
             self.kirim(a["partai_id"], evaluasi_palsu()[:3])
         self.assertEqual(e.exception.status_code, 422)
         self.assertNotEqual(self.ambil()["partai_id"], a["partai_id"])
+
+
+class AlamatPengirim(unittest.TestCase):
+    """Audit 27 Sep: X-Forwarded-For palsu lolos dari batas tebakan kode dan
+    bisa mengunci semua pembantu."""
+
+    def minta(self, klien, **header):
+        from starlette.requests import Request
+        return Request({"type": "http", "method": "POST", "path": "/api/pembantu/ambil",
+                        "headers": [(k.replace("_", "-").encode(), v.encode()) for k, v in header.items()],
+                        "client": (klien, 50000)})
+
+    def test_perangkat_wifi_tidak_bisa_memalsukan_alamat(self):
+        for h in ({"x_forwarded_for": "203.0.113.1"}, {"x_real_ip": "203.0.113.2"},
+                  {"cf_connecting_ip": "203.0.113.3"}):
+            with self.subTest(header=h):
+                self.assertEqual(pb.asal_permintaan(self.minta("192.168.1.20", **h)), "192.168.1.20")
+
+    def test_lewat_cloudflared_memakai_cf_connecting_ip(self):
+        r = self.minta("127.0.0.1", cf_connecting_ip="198.51.100.4",
+                       x_forwarded_for="203.0.113.9, 198.51.100.4")
+        self.assertEqual(pb.asal_permintaan(r), "198.51.100.4")
+
+    def test_x_forwarded_for_tidak_dipercaya_walau_dari_lokal(self):
+        """Elemen pertama X-Forwarded-For diteruskan Cloudflare apa adanya dari pengirim."""
+        self.assertEqual(pb.asal_permintaan(self.minta("127.0.0.1", x_forwarded_for="203.0.113.9")),
+                         "127.0.0.1")
+
+    def test_ganti_header_tiap_tebakan_tetap_kena_batas(self):
+        pb._gagal.clear()
+        self.addCleanup(pb._gagal.clear)
+        with mock.patch.object(pb, "baca_kode", lambda *a, **k: "123456"):
+            for i in range(pb.GAGAL_PER_ASAL):
+                asal = pb.asal_permintaan(self.minta("192.168.1.20", x_forwarded_for=f"10.0.0.{i}"))
+                with self.assertRaises(HTTPException):
+                    pb._periksa_kode("000000", asal)
+            asal = pb.asal_permintaan(self.minta("192.168.1.20", x_forwarded_for="10.0.0.99"))
+            with self.assertRaises(HTTPException) as e:
+                pb._periksa_kode("000000", asal)
+            self.assertEqual(e.exception.status_code, 429)
 
 
 class SemuaRuteTertutupDariInternet(unittest.TestCase):

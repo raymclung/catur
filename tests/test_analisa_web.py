@@ -22,6 +22,8 @@ sys.path.insert(0, str(AKAR))
 from fastapi import HTTPException
 
 from app import analisa_web as aw
+from app import proses as pr
+from app import tugas_batch as tb
 
 
 LOG_CONTOH = """1.013 partai dipilih  |  profil hemat, depth 16, RAM ~371 MB  |  perkiraan 676 menit
@@ -217,7 +219,9 @@ class Penjagaan(unittest.TestCase):
         import sqlite3
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
-        conn.execute("CREATE TABLE partai (id INTEGER PRIMARY KEY, sumber TEXT)")
+        # kolom yang dibaca daftar_sumber() untuk angka "belum" (skema asli selalu punya)
+        conn.execute("CREATE TABLE partai (id INTEGER PRIMARY KEY, sumber TEXT, "
+                     "jumlah_langkah INTEGER DEFAULT 40, hasil TEXT DEFAULT '1-0')")
         conn.execute("CREATE TABLE analisis (partai_id INTEGER)")
         for i, s in enumerate(sumber, start=1):
             conn.execute("INSERT INTO partai (id, sumber) VALUES (?, ?)", (i, s))
@@ -332,12 +336,12 @@ class Kemajuan(unittest.TestCase):
 class CatatanTugas(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.asli_path, self.asli_pindai = aw.PATH_TUGAS, aw._pindai_batch
-        aw.PATH_TUGAS = Path(self.tmp.name) / "tugas.json"
+        self.asli_path, self.asli_pindai = tb.PATH_TUGAS, aw._pindai_batch
+        tb.PATH_TUGAS = aw.PATH_TUGAS = Path(self.tmp.name) / "tugas.json"
         aw._pindai_batch = lambda: []
 
     def tearDown(self):
-        aw.PATH_TUGAS, aw._pindai_batch = self.asli_path, self.asli_pindai
+        tb.PATH_TUGAS, aw.PATH_TUGAS, aw._pindai_batch = self.asli_path, self.asli_path, self.asli_pindai
         self.tmp.cleanup()
 
     def test_tugas_yang_mati_di_tengah_dilabeli_gagal(self):
@@ -354,7 +358,7 @@ class CatatanTugas(unittest.TestCase):
         self.assertFalse(t["berjalan"])
         self.assertEqual(t["selesai"], 2)         # kemajuan ikut dibaca dari log
         # perubahannya disimpan, bukan cuma di jawaban
-        self.assertEqual(json.loads(aw.PATH_TUGAS.read_text(encoding="utf-8"))[0]["status"],
+        self.assertEqual(json.loads(tb.PATH_TUGAS.read_text(encoding="utf-8"))[0]["status"],
                          "gagal")
 
     def test_tugas_dengan_baris_penutup_dilabeli_selesai(self):
@@ -365,7 +369,7 @@ class CatatanTugas(unittest.TestCase):
 
     def test_catatan_dibatasi(self):
         aw._tulis_tugas([{"pid": i, "status": "selesai", "log": "x"} for i in range(40)])
-        self.assertEqual(len(json.loads(aw.PATH_TUGAS.read_text(encoding="utf-8"))), aw.MAKS_TUGAS)
+        self.assertEqual(len(json.loads(tb.PATH_TUGAS.read_text(encoding="utf-8"))), tb.MAKS_TUGAS)
 
 
 class Peluncuran(unittest.TestCase):
@@ -379,26 +383,49 @@ class Peluncuran(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         d = Path(self.tmp.name)
-        self.asli = (aw.PATH_TUGAS, aw.FOLDER_LOG, aw._pindai_batch, aw._perintah)
+        self.asli = (tb.PATH_TUGAS, tb.FOLDER_LOG, aw._pindai_batch, aw._perintah)
         self.asli_db = aw.PATH_DB
+        self.asli_pindai_pr = pr._pindai_batch
         aw.PATH_DB = buat_db_uji(d)
-        aw.PATH_TUGAS = d / "tugas.json"
-        aw.FOLDER_LOG = d
+        tb.PATH_TUGAS = aw.PATH_TUGAS = d / "tugas.json"
+        tb.FOLDER_LOG = aw.FOLDER_LOG = d
         aw._pindai_batch = lambda: []
+        # masih_hidup() (dipakai _rangkum_tugas) memanggil _pindai_batch MILIK
+        # app.proses, bukan salinan di analisa_web — tanpa tambalan ini tes
+        # membaca daftar proses sungguhan yang ditahan 15 detik, jadi anak
+        # yang sudah keluar masih terbaca hidup (30 Sep 2026: gagal 6 dari 20
+        # di bawah beban). Yang tersisa: Windows sendiri (_proses_ada).
+        pr._pindai_batch = lambda: []
         asli_perintah = self.asli[3]
         aw._perintah = lambda s: asli_perintah(s) + ["--lihat-saja"]
 
     def tearDown(self):
-        aw.PATH_TUGAS, aw.FOLDER_LOG, aw._pindai_batch, aw._perintah = self.asli
+        # Tes ini benar-benar meluncurkan proses; ditunggu sampai mati supaya
+        # tidak ada proses yang tertinggal hidup sesudah suite selesai
+        # ("subprocess ... is still running", audit 21 Sep 2026).
+        self.tunggu_anak_mati()
+        tb.PATH_TUGAS, tb.FOLDER_LOG, aw._pindai_batch, aw._perintah = self.asli
+        aw.PATH_TUGAS, aw.FOLDER_LOG = self.asli[0], self.asli[1]
         aw.PATH_DB = self.asli_db
+        pr._pindai_batch = self.asli_pindai_pr
         try:
             self.tmp.cleanup()
         except OSError:
             pass          # Windows: proses anak kadang masih memegang log sesaat
 
+    def tunggu_anak_mati(self, batas: float = 30.0) -> None:
+        for pid in list(getattr(self, "pid_anak", [])):
+            habis = time.time() + batas
+            while time.time() < habis and aw._proses_ada(pid):
+                time.sleep(0.2)
+            if aw._proses_ada(pid):
+                aw._matikan(pid)
+        aw._panen_anak()          # catatan Popen ikut dibersihkan, bukan cuma prosesnya
+
     def test_proses_jalan_dan_lognya_terbaca(self):
         jawab = aw.mulai(aw.Saringan(sumber="twic", min_elo=2700, terbaru=3))
         tugas = jawab["tugas"]
+        self.pid_anak = [tugas["pid"]]            # ditunggu mati di tearDown
         self.assertGreater(tugas["pid"], 0)
         self.assertEqual(tugas["status"], "berjalan")
         self.assertEqual(tugas["jumlah"], jawab["pratinjau"]["jumlah"])
@@ -413,8 +440,17 @@ class Peluncuran(unittest.TestCase):
         self.assertIn("profil hemat", isi)
 
         # catatan tugas tersimpan dan bisa dirangkum
-        disimpan = json.loads(aw.PATH_TUGAS.read_text(encoding="utf-8"))
+        disimpan = json.loads(tb.PATH_TUGAS.read_text(encoding="utf-8"))
         self.assertEqual(disimpan[-1]["pid"], tugas["pid"])
+        # Baris "partai dipilih" tertulis SEBELUM proses anak mencetak daftar
+        # partai, menutup database, dan keluar. Saat CPU sibuk jeda itu bisa
+        # detik-an, dan selama itu `berjalan` memang benar True — dulu tes ini
+        # gagal 3 dari 10 kali di bawah beban (30 Sep 2026). Tunggu prosesnya
+        # keluar SENDIRI; tidak dibunuh, supaya anak yang macet tetap gagal.
+        habis = time.time() + 60
+        while time.time() < habis and aw._proses_ada(tugas["pid"]):
+            time.sleep(0.2)
+        self.assertFalse(aw._proses_ada(tugas["pid"]), "proses --lihat-saja tidak keluar dalam 60 detik")
         rangkum = aw._rangkum_tugas()[0]
         # --lihat-saja keluar tanpa baris penutup, jadi statusnya bukan 'selesai';
         # yang diuji di sini prosesnya benar-benar jalan lalu berhenti.
@@ -447,12 +483,13 @@ class DaftarPemain(unittest.TestCase):
             "INSERT INTO pemain(nama, nama_normal, gelar, dibuat_pada) VALUES (?,?,?,?)",
             (nama, nama.lower(), gelar, self.sekarang())).lastrowid
 
-    def partai(self, putih, hitam, sumber, dianalisis=False, n=1):
+    def partai(self, putih, hitam, sumber, dianalisis=False, n=1, hasil="1-0", langkah=40):
         for i in range(n):
             pid = self.conn.execute(
                 "INSERT INTO partai(putih_id, hitam_id, hasil, jumlah_langkah, pgn, sumber, "
-                "hash_unik, diimpor_pada) VALUES (?,?,'1-0',40,'x',?,?,?)",
-                (putih, hitam, sumber, f"h{putih}-{hitam}-{sumber}-{i}-{dianalisis}",
+                "hash_unik, diimpor_pada) VALUES (?,?,?,?,'x',?,?,?)",
+                (putih, hitam, hasil, langkah, sumber,
+                 f"h{putih}-{hitam}-{sumber}-{i}-{dianalisis}-{hasil}-{langkah}",
                  self.sekarang())).lastrowid
             if dianalisis:
                 self.conn.execute(
@@ -515,6 +552,25 @@ class DaftarPemain(unittest.TestCase):
         self.assertTrue(tanda["lichess-user"])
         self.assertFalse(tanda["twic"])
 
+    def test_belum_hanya_yang_bisa_dipilih(self):
+        """28 Sep 2026: Mesin menulis "1 partai GM belum" (Tal-Tukmakov 1983,
+        hasil '*'), tapi Mulai menjawab 0 partai: pilih_partai() menyaring '*'
+        dan partai < 10 langkah, angka-angkanya tidak."""
+        from app import analisa_web as aw
+        a = self.pemain("Tal, Mihail", "GM")
+        b = self.pemain("Tukmakov, Vladimir B", "GM")
+        self.partai(a, b, "pgnmentor", hasil="*")               # tak bisa dipilih
+        self.partai(a, b, "pgnmentor", langkah=5)               # terlalu pendek
+        self.partai(a, b, "pgnmentor", hasil="*", dianalisis=True)  # sudah, via --id
+        self.partai(a, b, "pgnmentor", n=2)                     # benar-benar belum
+        aw._angka["hasil"] = None
+        angka = aw.angka_database(self.conn)
+        aw._angka["hasil"] = None
+        self.assertEqual(angka["belum_gm"], 2)
+        self.assertEqual({s["nama"]: s["belum"] for s in angka["sumber"]}["pgnmentor"], 2)
+        self.assertEqual([h["belum"] for h in aw.daftar_pemain(self.conn, batas=10)
+                          if h["nama"] == "Tal, Mihail"], [2])
+
     def test_saringan_sumber_dan_cari(self):
         from app.analisa_web import daftar_pemain
         a = self.pemain("Carlsen, Magnus", "GM")
@@ -542,12 +598,13 @@ class KemajuanDariTerminal(unittest.TestCase):
         import shutil
         self.tmp = tempfile.mkdtemp()
         self._rmtree = shutil.rmtree
-        self.asli_akar = aw.AKAR
-        aw.AKAR = Path(self.tmp)
-        (Path(self.tmp) / "data" / "laporan").mkdir(parents=True)
+        # jalur berkas kemajuan sekarang milik app/tugas_batch.py
+        self.asli_folder = tb.FOLDER_LOG
+        tb.FOLDER_LOG = Path(self.tmp) / "data" / "laporan"
+        tb.FOLDER_LOG.mkdir(parents=True)
 
     def tearDown(self):
-        aw.AKAR = self.asli_akar
+        tb.FOLDER_LOG = self.asli_folder
         self._rmtree(self.tmp, ignore_errors=True)
 
     def tulis(self, pid, isi):
@@ -581,3 +638,293 @@ class KemajuanDariTerminal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatasBatchBocor(unittest.TestCase):
+    """
+    25 Sep 2026: EMPAT batch berjalan padahal MAKS_BATCH = 2, dan keempatnya
+    mengerjakan partai yang sama. Sebabnya pemeriksaan slot cuma melihat
+    daftar proses — batch yang baru dianakkan belum muncul di sana.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tugas_asli = tb.PATH_TUGAS
+        tb.PATH_TUGAS = Path(self.tmp.name) / "tugas.json"
+        self.pindai_asli = aw._pindai_batch
+        self.ada_asli = aw._proses_ada
+
+    def tearDown(self):
+        tb.PATH_TUGAS = self.tugas_asli
+        aw._pindai_batch = self.pindai_asli
+        aw._proses_ada = self.ada_asli
+        self.tmp.cleanup()
+
+    def tulis_tugas(self, *baris):
+        tb._tulis_tugas(list(baris))
+
+    def test_catatan_tugas_ikut_dihitung_walau_belum_terlihat_di_daftar_proses(self):
+        aw._pindai_batch = lambda: []                      # pindaian belum menyusul
+        aw._proses_ada = lambda pid: True
+        self.tulis_tugas({"pid": 111, "status": "berjalan", "perintah": "a"},
+                         {"pid": 222, "status": "berjalan", "perintah": "b"})
+        self.assertEqual(sorted(b["pid"] for b in aw.batch_berjalan()), [111, 222])
+
+    def test_pid_yang_sudah_mati_tidak_dihitung(self):
+        aw._pindai_batch = lambda: []
+        aw._proses_ada = lambda pid: False
+        self.tulis_tugas({"pid": 111, "status": "berjalan", "perintah": "a"})
+        self.assertEqual(aw.batch_berjalan(), [])
+
+    def test_tidak_dobel_kalau_muncul_di_kedua_sumber(self):
+        aw._pindai_batch = lambda: [{"pid": 111, "perintah": "a"}]
+        aw._proses_ada = lambda pid: True
+        self.tulis_tugas({"pid": 111, "status": "berjalan", "perintah": "a"})
+        self.assertEqual([b["pid"] for b in aw.batch_berjalan()], [111])
+
+    def test_status_selain_berjalan_diabaikan(self):
+        aw._pindai_batch = lambda: []
+        aw._proses_ada = lambda pid: True
+        self.tulis_tugas({"pid": 111, "status": "selesai", "perintah": "a"},
+                         {"pid": 222, "status": "dihentikan", "perintah": "b"})
+        self.assertEqual(aw.batch_berjalan(), [])
+
+    def test_peluncuran_kedua_ditolak_saat_slot_penuh(self):
+        aw._pindai_batch = lambda: []
+        aw._proses_ada = lambda pid: True
+        self.tulis_tugas(*[{"pid": 100 + i, "status": "berjalan", "perintah": "x"}
+                           for i in range(aw.MAKS_BATCH)])
+        with self.assertRaises(HTTPException) as c:
+            aw.luncurkan(aw.Saringan(terbaru=5, profil="cepat"))
+        self.assertEqual(c.exception.status_code, 409)
+        self.assertIn("batasnya", str(c.exception.detail))
+
+    def test_kunci_peluncuran_hanya_satu_pada_satu_waktu(self):
+        """Kunci berkas lintas proses: server dan jaga_antrean.py tidak bisa
+        meluncurkan bersamaan."""
+        import threading
+        aw.PATH_KUNCI_LUNCUR = Path(self.tmp.name) / "luncur.lock"
+        aw.TUNGGU_KUNCI_LUNCUR = 0.5
+        masuk = threading.Event()
+        hasil = []
+        def tahan():
+            with aw._kunci_peluncuran():
+                masuk.set()
+                time.sleep(1.2)
+        t = threading.Thread(target=tahan, daemon=True)
+        t.start()
+        masuk.wait(2)
+        try:
+            with aw._kunci_peluncuran():
+                hasil.append("dapat")
+        except HTTPException as e:
+            hasil.append(e.status_code)
+        t.join(3)
+        self.assertEqual(hasil, [409], "peluncuran kedua harus menunggu lalu menolak")
+
+    def test_bagian_berbeda_tetap_boleh(self):
+        perintah = " ".join(aw._perintah(aw.Saringan(terbaru=2000, profil="cepat", bagian="0/2")))
+        aw._pindai_batch = lambda: [{"pid": 111, "perintah": "python -u " + perintah}]
+        aw._proses_ada = lambda pid: True
+        self.tulis_tugas()
+        lain = aw.Saringan(terbaru=2000, profil="cepat", bagian="1/2")
+        self.assertNotIn(" ".join(aw._perintah(lain)), "python -u " + perintah)
+
+
+class BatchKembar(unittest.TestCase):
+    """
+    Batch baru yang akan mengerjakan partai yang sama dengan batch yang jalan
+    diputar ke ujung lain, bukan ditolak (Ray, 27 Sep 2026). Database uji:
+    twic 01-01 Carlsen, twic 01-02 Nakamura, lichess-user 01-03.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.asli = (aw.PATH_DB, tb.PATH_TUGAS, aw._pindai_batch, aw._proses_ada)
+        aw.PATH_DB = buat_db_uji(d)
+        tb.PATH_TUGAS = d / "tugas.json"
+        aw._proses_ada = lambda pid: True
+
+    def tearDown(self):
+        aw.PATH_DB, tb.PATH_TUGAS, aw._pindai_batch, aw._proses_ada = self.asli
+        self.tmp.cleanup()
+
+    @staticmethod
+    def jalan(pid, **saringan):
+        s = aw.Saringan(profil="cepat", **saringan)
+        return {"pid": pid, "perintah": r"C:\py\python.exe -X utf8 -u " + " ".join(aw._perintah(s))}
+
+    def test_teks_beda_partai_sama_diputar(self):
+        """Kasus nyata: 22436 `--terbaru 2000` dan 6804 `--sumber gm --terbaru
+        2000` lolos bersamaan karena tulisannya beda, padahal partainya sama."""
+        berjalan = [self.jalan(22436, sumber="twic", terbaru=1)]
+        s, catatan = aw._hindari_kembar(aw.Saringan(sumber="gm", terbaru=1, profil="cepat"), berjalan)
+        self.assertTrue(s.terlama)
+        self.assertIn("--terlama", aw._perintah(s))
+        self.assertIn("22436", catatan)
+        self.assertIn("terlama", catatan)
+
+    def test_partai_berbeda_tidak_diubah(self):
+        berjalan = [self.jalan(111, sumber="lichess-user", terbaru=1)]
+        s = aw.Saringan(sumber="twic", terbaru=1, profil="cepat")
+        self.assertEqual(aw._hindari_kembar(s, berjalan), (s, None))
+
+    def test_bagian_berbeda_tidak_diubah(self):
+        berjalan = [self.jalan(111, terbaru=5, bagian="0/2")]
+        s = aw.Saringan(terbaru=5, profil="cepat", bagian="1/2")
+        self.assertEqual(aw._hindari_kembar(s, berjalan), (s, None))
+
+    def test_kembar_terlama_diputar_ke_terbaru(self):
+        berjalan = [self.jalan(111, terbaru=1, terlama=True)]
+        s, catatan = aw._hindari_kembar(
+            aw.Saringan(terbaru=1, profil="cepat", terlama=True), berjalan)
+        self.assertFalse(s.terlama)
+        self.assertIn("terbaru", catatan)
+
+    def test_kedua_arah_sudah_jalan_ditolak(self):
+        berjalan = [self.jalan(111, terbaru=5), self.jalan(222, terbaru=5, terlama=True)]
+        with self.assertRaises(HTTPException) as c:
+            aw._hindari_kembar(aw.Saringan(sumber="gm", terbaru=5, profil="cepat"), berjalan)
+        self.assertEqual(c.exception.status_code, 409)
+        self.assertIn("dua arah", str(c.exception.detail))
+
+    def test_perintah_tak_terbaca_hanya_dibandingkan_teksnya(self):
+        s = aw.Saringan(terbaru=1, profil="cepat")
+        self.assertEqual(aw._hindari_kembar(s, [{"pid": 1, "perintah": "a"}]), (s, None))
+
+    def test_lihat_dulu_menampilkan_arah_yang_akan_dipakai(self):
+        """Tombol "Lihat dulu" dan "Mulai" harus memilih partai yang sama."""
+        aw._pindai_batch = lambda: [self.jalan(22436, terbaru=1)]
+        aw._pindai["waktu"] = 0.0
+        d = aw.pratinjau(aw.Saringan(terbaru=1, profil="cepat"))
+        self.assertIn("--terlama", d["perintah"])
+        self.assertIn("22436", d["catatan"])
+        self.assertIn("Carlsen", d["contoh"][0])
+
+
+class HentikanBatchAntrean(unittest.TestCase):
+    """
+    Hentikan batch dari penjaga dulu dibatalkan penjaga: prosesnya hilang
+    tanpa baris penutup, jadi dianggap "terputus" dan dijalankan lagi sampai
+    3 kali (22 Sep 21:05 dihentikan Ray, 21:06 diantrekan ulang).
+    """
+
+    def setUp(self):
+        from app import antrean
+        self.antrean = antrean
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.asli = (antrean.PATH_ANTREAN, tb.PATH_TUGAS, aw._hidup, aw._matikan)
+        antrean.PATH_ANTREAN = d / "antrean.json"
+        tb.PATH_TUGAS = d / "tugas.json"
+        aw._hidup = lambda pid, sejak=None: True
+        self.dimatikan = []
+        aw._matikan = lambda pid, **k: self.dimatikan.append(pid)
+        k = antrean.tambah({"terbaru": 5, "profil": "cepat"}, "uji")
+        antrean.perbarui(k["id"], status="jalan", pid=4321)
+
+    def tearDown(self):
+        (self.antrean.PATH_ANTREAN, tb.PATH_TUGAS, aw._hidup, aw._matikan) = self.asli
+        self.tmp.cleanup()
+
+    def test_item_antrean_jadi_batal(self):
+        aw.hentikan(aw.Penghentian(pid=4321))
+        self.assertEqual(self.dimatikan, [4321])
+        k = self.antrean.baca()[0]
+        self.assertEqual(k["status"], "batal")
+        self.assertIn("4321", k["alasan"])
+
+    def test_penjaga_tidak_menjalankannya_lagi(self):
+        import jaga_antrean as jaga
+        aw.hentikan(aw.Penghentian(pid=4321))
+        asli = jaga.masih_hidup
+        jaga.masih_hidup = lambda pid, sejak=None: False
+        try:
+            jaga.segarkan_status()
+        finally:
+            jaga.masih_hidup = asli
+        self.assertEqual(self.antrean.baca()[0]["status"], "batal")
+
+    def test_gagal_mematikan_status_dikembalikan(self):
+        def gagal(pid, **k):
+            raise HTTPException(status_code=500, detail="akses ditolak")
+        aw._matikan = gagal
+        with self.assertRaises(HTTPException):
+            aw.hentikan(aw.Penghentian(pid=4321))
+        self.assertEqual(self.antrean.baca()[0]["status"], "jalan")
+
+
+class LogBatchTidakBertabrakan(unittest.TestCase):
+    """25 Sep 07:41: dua batch yang mulai di detik yang sama berbagi satu log."""
+
+    def test_dua_log_di_detik_yang_sama_berbeda_berkas(self):
+        from datetime import datetime as dt
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            beku = mock.Mock()
+            beku.now.return_value = dt(2026, 9, 25, 7, 41, 2)
+            with mock.patch.object(aw, "FOLDER_LOG", Path(d)), mock.patch.object(aw, "datetime", beku):
+                p1, f1 = aw.buka_log_baru()
+                p2, f2 = aw.buka_log_baru()
+            f1.close()
+            f2.close()
+            self.assertNotEqual(p1, p2)
+            self.assertEqual(p1.name, "log-analisa-web-20260925-074102.txt")
+            self.assertEqual(p2.name, "log-analisa-web-20260925-074102-2.txt")
+
+
+class DangkalButuhProfilTeliti(unittest.TestCase):
+    """--dangkal + profil cepat mengulang partai yang sama selamanya."""
+
+    def test_web_menolak(self):
+        with self.assertRaises(HTTPException) as c:
+            aw._periksa(aw.Saringan(dangkal=True, profil="cepat"))
+        self.assertEqual(c.exception.status_code, 422)
+        aw._periksa(aw.Saringan(dangkal=True, profil="hemat"))       # tidak melempar
+
+    def test_cli_menolak(self):
+        import contextlib
+        import io
+        from unittest import mock
+        import analisis_partai as ap
+        with mock.patch.object(sys, "argv", ["analisis_partai.py", "--dangkal", "--terbaru", "5",
+                                             "--profil", "cepat"]), \
+                contextlib.redirect_stderr(io.StringIO()) as galat, \
+                self.assertRaises(SystemExit):
+            ap.main()
+        self.assertIn("--dangkal", galat.getvalue())
+
+
+class UjiBatasSaringan(unittest.TestCase):
+    """Audit 28 Sep 2026: masukan raksasa dulu 500 di /pratinjau, /antrean, /mulai."""
+
+    def test_masukan_raksasa_ditolak_validasi(self):
+        from pydantic import ValidationError
+        from app.analisa_web import Saringan
+        for isi in ({"id": list(range(1, 40000))}, {"pemain": ["a" * 100000]},
+                    {"pemain": ["\udc80"]}, {"pemain": ["x"] * 21},
+                    {"bagian": "1/0"}, {"bagian": "0/0"}, {"bagian": "3/2"}):
+            with self.assertRaises(ValidationError, msg=str(isi)[:60]):
+                Saringan(**isi)
+        Saringan(bagian="1/2", pemain=["Carlsen"], id=[1, 2])
+
+
+class UjiAngkaMesinTanpaPgn(unittest.TestCase):
+    """29 Sep 2026: angka halaman Mesin dulu memindai seluruh tabel partai
+    (barisnya memuat PGN, ±270 MB) — 10 detik tiap cache habis saat disk
+    dingin. Kini harus lewat indeks penutup v12 saja."""
+
+    def test_daftar_sumber_memakai_indeks_penutup(self):
+        import inspect
+        import re
+        from app import analisa_web as A
+        from app.db import buat_skema, koneksi
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = koneksi(Path(tmp) / "u.db")
+            buat_skema(conn)
+            sql = re.search(r'q = f"""(.*?)"""', inspect.getsource(A.daftar_sumber), re.S).group(1)
+            rencana = " | ".join(r[3] for r in conn.execute(
+                "EXPLAIN QUERY PLAN " + sql.replace("{SYARAT_BISA_DIPILIH}", A.SYARAT_BISA_DIPILIH)))
+            conn.close()
+        self.assertIn("COVERING INDEX idx_partai_bisa_dipilih", rencana)

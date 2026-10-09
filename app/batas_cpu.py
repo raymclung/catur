@@ -22,13 +22,19 @@ Stockfish yang sedang jalan dan terbaca kembali 0xFF00.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from pathlib import Path
 
+from . import berkas_json
+from .db import FOLDER_DATA
+
 AKAR = Path(__file__).resolve().parents[1]
-PATH_PENGATURAN = AKAR / "data" / "pengaturan-mesin.json"
+PATH_PENGATURAN = FOLDER_DATA / "pengaturan-mesin.json"
+# Hanya Stockfish MILIK PROYEK INI yang boleh dikurung/dibekukan. Mesin ini
+# juga menjalankan Stockfish lain (aplikasi puzzle Ray, coding/puzzle/...);
+# dulu semua `stockfish.exe` ikut kena (audit 28 Sep 2026).
+FOLDER_ENGINE = AKAR / "engine"
 
 PERSEN_BAWAAN = 50
 PERSEN_VALID = (25, 50, 75, 100)
@@ -44,9 +50,9 @@ def inti_total() -> int:
 
 def baca_persen(path: Path | None = None) -> int:
     try:
-        nilai = int(json.loads((path or PATH_PENGATURAN).read_text(encoding="utf-8"))
+        nilai = int(berkas_json.baca(path or PATH_PENGATURAN, {})
                     .get("batas_cpu_persen", PERSEN_BAWAAN))
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (ValueError, TypeError):
         return PERSEN_BAWAAN
     return nilai if nilai in PERSEN_VALID else PERSEN_BAWAAN
 
@@ -54,16 +60,10 @@ def baca_persen(path: Path | None = None) -> int:
 def simpan_persen(persen: int, path: Path | None = None) -> int:
     if persen not in PERSEN_VALID:
         raise ValueError(f"batas CPU harus salah satu dari {PERSEN_VALID}")
-    p = path or PATH_PENGATURAN
-    p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        isi = json.loads(p.read_text(encoding="utf-8"))
-        if not isinstance(isi, dict):
-            isi = {}
-    except (OSError, ValueError):
-        isi = {}
-    isi["batas_cpu_persen"] = persen
-    p.write_text(json.dumps(isi, indent=1), encoding="utf-8", newline="\n")
+    # Berkas yang sama dipakai jeda_mesin.py: baca-ubah-tulis di bawah kunci,
+    # kalau tidak tanda `jeda` bisa hilang tertimpa (audit 28 Sep 2026).
+    with berkas_json.ubah(path or PATH_PENGATURAN, {}) as isi:
+        isi["batas_cpu_persen"] = persen
     return persen
 
 
@@ -102,8 +102,47 @@ def terapkan(pid: int, nilai_masker: int) -> bool:
         k32.CloseHandle(h)
 
 
+def _jalur_proses(pid: int) -> Path | None:
+    """Jalur berkas .exe sebuah proses (Windows), None kalau tidak bisa dibaca."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x1000, False, pid)       # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        n = wintypes.DWORD(len(buf))
+        if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            return None
+        return Path(buf.value)
+    finally:
+        k32.CloseHandle(h)
+
+
+def milik_proyek(jalur: Path | None, folder: Path = FOLDER_ENGINE) -> bool:
+    """Engine ini dari folder `engine/` proyek? Jalur yang tak terbaca = BUKAN."""
+    if jalur is None:
+        return False
+    try:
+        return Path(jalur).resolve().is_relative_to(Path(folder).resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def pid_stockfish() -> list[int]:
-    """PID semua Stockfish yang sedang jalan (termasuk yang dari terminal)."""
+    """
+    PID Stockfish milik proyek ini yang sedang jalan (termasuk batch dari
+    terminal). Stockfish dari folder lain tidak pernah disentuh.
+    """
+    semua = _pid_nama_stockfish()
+    if os.name != "nt":
+        return semua
+    return [pid for pid in semua if milik_proyek(_jalur_proses(pid))]
+
+
+def _pid_nama_stockfish() -> list[int]:
+    """PID semua proses bernama stockfish, dari folder mana pun."""
     try:
         if os.name == "nt":
             keluar = subprocess.run(

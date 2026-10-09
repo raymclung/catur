@@ -25,10 +25,12 @@
     <span class="pemisah" aria-hidden="true"></span>
     <a href="/ringkasan">Ringkasan</a>
     <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/tebak.html" title="Main sebagai GM di partai aslinya dan tebak langkahnya">Tebak GM</a>
     <a href="/static/kekalahan.html">Kekalahan</a>
     <a href="/static/kelemahan.html">Kelemahan</a>
     <a href="/static/repertoire.html">Repertoire</a>
     <a href="/static/kemajuan.html">Kemajuan</a>
+    <a href="/tanya" title="Tanya database pakai bahasa Indonesia">Tanya</a>
   </div></nav>
 </header>
 
@@ -112,6 +114,21 @@
           Ronde yang sudah lengkap dilewati, jadi tautan yang sama boleh diimpor
           berkali-kali. Turnamen yang masih berjalan akan diambil lagi di lain
           waktu untuk melengkapi hasilnya.
+        </div>
+
+        <div class="baris-pisah" style="margin-top:14px;padding-top:12px">
+          <strong>Partai GM terkenal minggu ini</strong>
+          <div class="kecil redup" style="margin-top:4px">
+            Membaca sendiri semua turnamen resmi Lichess 10 hari terakhir (termasuk
+            bagian-bagiannya, mis. Candidates Open/Women) dan hanya menyimpan partai
+            pemain kuat: salah satu pemain Elo ≥ 2500, atau bergelar GM (berapa pun ratingnya).
+            Jalankan seminggu sekali.
+          </div>
+          <div class="alat" style="margin-top:8px">
+            <span class="kecil" id="status-mingguan">memuat…</span>
+            <button type="button" id="mulai-mingguan">Perbarui sekarang</button>
+          </div>
+          <pre class="kecil redup" id="log-mingguan" style="white-space:pre-wrap;margin:8px 0 0" hidden></pre>
         </div>
       </div>
     </div>

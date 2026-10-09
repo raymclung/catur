@@ -11,11 +11,11 @@ batch selesai lalu engine menganggur sampai ada yang menekan Mulai.
 Yang PERLU diluruskan: tidak ada yang berjalan saat komputer dimatikan —
 Windows mematikan semua proses. Yang dijamin penjaga ini: antreannya tersimpan
 di berkas, jadi begitu komputer hidup lagi dan penjaga dijalankan (bisa lewat
-Task Scheduler, lihat README), sisa pekerjaan dilanjutkan sendiri.
+folder Startup lewat `--daftarkan`), sisa pekerjaan dilanjutkan sendiri.
 
 Batas jumlah batch tetap aturan yang sama dengan halaman Mesin (CLAUDE.md
-bagian 7): maksimal 5 di mesin ini. Penjaga memakai batas sendiri yang satu
-lebih kecil (bawaan 2 = batas mesin, permintaan Ray); `--maks N` untuk mengubahnya.
+bagian 7): `MAKS_BATCH` di app/analisa_web.py, sekarang 2. Penjaga memakai
+batas yang sama (bawaan 2); `--maks N` untuk mengubahnya.
 """
 
 from __future__ import annotations
@@ -30,20 +30,24 @@ AKAR = Path(__file__).resolve().parent
 sys.path.insert(0, str(AKAR))
 
 from app import antrean
+from app.db import FOLDER_DATA
+from app.proses import masih_hidup
 from app.analisa_web import (MAKS_BATCH, Saringan, _pindai, _pindai_batch,
+                             batch_berjalan,
                              _pindai_proses, _status_akhir, luncurkan)
 
 # Batas jumlah batch yang boleh berjalan bersamaan MENURUT PENJAGA. Dihitung
 # dari seluruh batch di mesin, bukan cuma milik penjaga, jadi penjaga tidak
-# pernah membuat mesin melewati aturan bersama. Bawaannya 3 = batas mesin:
-# Ray, 13 Sep 2026, "tolong set jadi 3 yang selalu aktif jangan 2". Aman
+# pernah membuat mesin melewati aturan bersama. Bawaannya 2 = batas mesin
+# (13 Sep sore sempat 3 atas permintaan Ray, malamnya kembali 2 karena RAM
+# penuh — CLAUDE.md bagian 7). Aman
 # karena batch berprioritas idle dan dikurung batas CPU (app/batas_cpu.py).
 MAKS_PENJAGA_BAWAAN = 2
 
 # Jeda antar pemeriksaan. Satu partai ±1 menit, jadi tidak perlu rapat-rapat.
 JEDA_BAWAAN = 60.0
 
-PATH_LOG = AKAR / "data" / "laporan" / "log-antrean.txt"
+PATH_LOG = FOLDER_DATA / "laporan" / "log-antrean.txt"
 
 # Pengisi slot kosong. Ray, 13 Sep 2026 malam: "kenapa ini cuma 2 sayang
 # waktunya harusnya berjalan 4 terus terusan". Kalau antrean habis tapi slot
@@ -148,10 +152,25 @@ def penjaga_lain_jalan() -> int | None:
 
     Perlu karena tugas logon bisa menyalakan penjaga kedua di atas yang sudah
     dihidupkan dari halaman Mesin; dua penjaga akan berebut antrean yang sama.
+
+    Hanya penjaga yang LEBIH TUA yang dihitung. Dulu siapa pun dihitung, jadi
+    dua penjaga yang menyala di detik yang sama (pintasan Nyalakan Server +
+    tombol di halaman Mesin) saling melihat dan KEDUANYA berhenti: 29 Sep
+    18:49:33, PID 4272 dan 15276, tidak ada penjaga sama sekali. Sekarang
+    yang lebih muda mengalah (waktu lahir proses; PID kalau sama).
     """
     import os
+    from app.proses import waktu_lahir_proses
+    saya = os.getpid()
+
+    def umur(pid):
+        lahir = waktu_lahir_proses(pid)
+        return (lahir if lahir is not None else float("inf"), pid)
+
     for b in _pindai_proses("jaga_antrean.py"):
-        if b["pid"] != os.getpid():
+        if b["pid"] == saya or "--jaga" not in (b.get("perintah") or ""):
+            continue                     # diri sendiri, atau `--lihat`/`--sekali`
+        if umur(b["pid"]) < umur(saya):
             return b["pid"]
     return None
 
@@ -178,6 +197,11 @@ def segarkan_status() -> None:
             continue
         if kerja.get("pid") in hidup:
             continue
+        # Tidak ada di pindaian belum tentu mati: pindaian bisa gagal sesaat.
+        # 27 Sep 17:03 batch 22436 yang masih hidup dicap terputus di sini dan
+        # penjaga meluncurkan kembarannya (29292). Butuh bukti kedua.
+        if kerja.get("pid") and masih_hidup(kerja["pid"], kerja.get("mulai")):
+            continue
         status, alasan = _status_akhir(Path(kerja.get("log", "")))
         ulang = kerja.get("ulang", 0)
         if status == "gagal" and ulang < MAKS_ULANG:
@@ -202,7 +226,14 @@ def masih_ada_kerja() -> bool:
 
 
 def _ada_yang_belum(sumber: str, bagian: str) -> bool:
-    """Masih ada partai sumber ini di bagian ini yang belum dianalisis?"""
+    """
+    Masih ada partai sumber ini di bagian ini yang belum dianalisis?
+
+    Syaratnya HARUS sama dengan yang dipilih analisis_partai.pilih_partai(),
+    termasuk `hasil <> '*'`. Audit 27 Sep 2026: tanpa itu, bagian yang tinggal
+    berisi partai '*' dianggap "masih ada", pekerjaannya selesai dengan "Tidak
+    ada partai", lalu ditambahkan lagi — tanpa henti, tiap putaran.
+    """
     from app.db import koneksi
     k, n = (int(x) for x in bagian.split("/"))
     if sumber == "gm":
@@ -214,7 +245,7 @@ def _ada_yang_belum(sumber: str, bagian: str) -> bool:
     try:
         return conn.execute(
             f"""SELECT 1 FROM partai g WHERE g.sumber IN ({','.join('?' * len(daftar))})
-                AND g.id % ? = ? AND g.jumlah_langkah >= 10
+                AND g.id % ? = ? AND g.jumlah_langkah >= 10 AND g.hasil <> '*'
                 AND NOT EXISTS (SELECT 1 FROM analisis a WHERE a.partai_id = g.id)
                 LIMIT 1""", daftar + [n, k]).fetchone() is not None
     finally:
@@ -280,13 +311,13 @@ def satu_putaran(maks: int, isi_otomatis: bool = True) -> bool:
     if kerja is None:
         if isi_otomatis:
             try:
-                kerja = isi_slot_kosong(maks, len(_pindai_batch()))
+                kerja = isi_slot_kosong(maks, len(batch_berjalan()))
             except Exception as e:           # noqa: BLE001 - mis. database terkunci; coba putaran berikutnya
                 _catat(f"pengisi slot gagal: {e}")
         if kerja is None:
             return masih_ada_kerja()      # yang jalan tetap ditunggu sampai selesai
 
-    berjalan = _pindai_batch()
+    berjalan = batch_berjalan()
     if len(berjalan) >= min(maks, MAKS_BATCH):
         return True                      # slot penuh; coba lagi nanti
 
@@ -301,6 +332,12 @@ def satu_putaran(maks: int, isi_otomatis: bool = True) -> bool:
         hasil = luncurkan(s)
     except Exception as e:               # noqa: BLE001 - mis. 409/422 dari pemeriksaan
         pesan = getattr(e, "detail", str(e))
+        # Saringan kembar dengan batch yang sedang jalan: bukan gagal, cuma
+        # belum waktunya. Kalau ditandai gagal, pekerjaan yang sah hilang dari
+        # antrean hanya karena kebetulan bentrok (25 Sep 2026).
+        if "saringan yang sama persis" in str(pesan):
+            _catat(f"#{kerja['id']} ditunda: {str(pesan)[:120]}")
+            return True
         # 0 partai = tidak ada yang perlu dikerjakan; itu bukan kegagalan.
         status = "selesai" if "Tidak ada partai" in str(pesan) else "gagal"
         antrean.perbarui(kerja["id"], status=status, alasan=str(pesan)[:200])
@@ -327,7 +364,7 @@ def main() -> int:
     p.add_argument("--jeda", type=float, default=JEDA_BAWAAN,
                    help=f"detik antar pemeriksaan (bawaan {JEDA_BAWAAN:.0f})")
     p.add_argument("--daftarkan", action="store_true",
-                   help="daftarkan penjaga ke Task Scheduler (hidup tiap logon)")
+                   help="daftarkan penjaga ke folder Startup (hidup tiap logon)")
     p.add_argument("--cabut", action="store_true",
                    help="cabut pendaftaran itu")
     p.add_argument("--cabut-kalau-habis", action="store_true", dest="cabut_habis",

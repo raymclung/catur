@@ -141,11 +141,11 @@ class UjiSkema(DasarDB):
         # v1: 7 index. v2 + idx_analisis_langkah_klas. v4 + idx_posisi_fen
         # (v7: diganti idx_posisi_fen_langkah). v6 + idx_partai_format.
         # v8: idx_partai_sumber diganti idx_partai_sumber_tanggal, jumlah tetap.
-        # v9 + idx_latihan_jawaban_kunci.
+        # v9 + idx_latihan_jawaban_kunci. v12 + idx_partai_bisa_dipilih.
         n = self.conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
         ).fetchone()[0]
-        self.assertEqual(n, 11)
+        self.assertEqual(n, 12)
 
     def test_tabel_analisis_ada_di_v2(self):
         nama = {r[0] for r in self.conn.execute(
@@ -173,6 +173,38 @@ class UjiPemain(DasarDB):
     def test_terverifikasi_hanya_0_atau_1(self):
         with self.assertRaises(sqlite3.IntegrityError):
             self.pemain("A", terverifikasi=2)
+
+    def test_akun_pribadi_hanya_0_atau_1(self):
+        a = self.pemain("A")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("UPDATE pemain SET akun_pribadi = 5 WHERE id = ?", (a,))
+
+    def test_akun_pribadi_ditegakkan_juga_di_database_hasil_migrasi(self):
+        """Audit 28 Sep 2026: kolom yang ditambahkan ALTER TABLE sebelum v11
+        tidak punya CHECK, dan database asli termasuk; nilai 5 diterima."""
+        self.conn.executescript("""
+            DROP TRIGGER IF EXISTS cek_akun_pribadi_insert;
+            DROP TRIGGER IF EXISTS cek_akun_pribadi_update;
+            ALTER TABLE pemain RENAME TO pemain_baru;
+            CREATE TABLE pemain (
+                id INTEGER PRIMARY KEY, nama TEXT NOT NULL, nama_normal TEXT NOT NULL,
+                fide_id TEXT UNIQUE, negara TEXT, gelar TEXT, elo_terakhir INTEGER,
+                terverifikasi INTEGER NOT NULL DEFAULT 0, dibuat_pada TEXT NOT NULL);
+            DROP TABLE pemain_baru;
+            ALTER TABLE pemain ADD COLUMN akun_pribadi INTEGER NOT NULL DEFAULT 0;
+            PRAGMA user_version = 10;
+        """)
+        a = self.pemain("A")
+        self.conn.execute("UPDATE pemain SET akun_pribadi = 5 WHERE id = ?", (a,))  # lubang lama
+        self.conn.execute("UPDATE pemain SET akun_pribadi = 0 WHERE id = ?", (a,))
+        buat_skema(self.conn)
+        self.assertEqual(versi_skema(self.conn), VERSI_SKEMA)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("UPDATE pemain SET akun_pribadi = 5 WHERE id = ?", (a,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("INSERT INTO pemain(nama, nama_normal, dibuat_pada, akun_pribadi) "
+                              "VALUES ('B', 'b', 'x', 2)")
+        self.conn.execute("UPDATE pemain SET akun_pribadi = 1 WHERE id = ?", (a,))  # sah tetap boleh
 
 
 class UjiPartai(DasarDB):

@@ -156,7 +156,8 @@ def nama_dari_berkas_pgn(folder: str, nama_lama: str) -> str | None:
     return list(calon)[0] if len(calon) == 1 else None
 
 
-def putuskan(nama_lama: str, data: dict | None, cari_bentrok=None):
+def putuskan(nama_lama: str, data: dict | None, cari_bentrok=None,
+             abaikan_beda_belakang: bool = False):
     """
     Tentukan nama baru untuk satu pemain.
 
@@ -171,7 +172,8 @@ def putuskan(nama_lama: str, data: dict | None, cari_bentrok=None):
         return None, "nama FIDE kosong"
     if nama_baru == nama_lama:
         return None, "sudah sama"
-    if nama_belakang_dari(nama_baru) != nama_belakang_dari(nama_lama):
+    if (not abaikan_beda_belakang
+            and nama_belakang_dari(nama_baru) != nama_belakang_dari(nama_lama)):
         return None, f"nama belakang berbeda ({nama_baru!r}) — FIDE ID mungkin keliru"
     if cari_bentrok:
         bentrok = cari_bentrok(normalisasi_nama(nama_baru))
@@ -187,21 +189,20 @@ def main() -> int:
     p.add_argument("--batas", type=int, default=0, help="olah maksimal sekian pemain")
     p.add_argument("--semua", action="store_true",
                    help="termasuk pemain yang namanya sudah lengkap (untuk mengisi negara/gelar)")
+    p.add_argument("--nama-resmi", action="store_true",
+                   help="pakai nama resmi FIDE apa adanya, walau nama belakangnya "
+                        "berbeda dari yang tersimpan (ejaan alih aksara, urutan "
+                        "nama, atau baris yang masih memakai username). Identitas "
+                        "tetap dipastikan lewat FIDE ID")
     p.add_argument("--cadangan-pgn", metavar="FOLDER",
                    help="untuk pemain yang tidak ada di FIDE (sudah wafat), cari nama "
                         "lengkap di berkas PGN folder ini")
     p.add_argument("--db")
     a = p.parse_args()
-
-    # Satu penulis besar pada satu waktu (CLAUDE.md bagian 7): impor atau
-    # analisis yang sedang jalan tidak boleh diadu dengan perubahan massal ini.
-    penjaga = None
-    if a.jalan:
-        try:
-            penjaga = KunciPenulis("rapikan nama dari FIDE").ambil()
-        except KunciTerpakai as e:
-            print(e)
-            return 1
+    # Log yang diarahkan ke berkas harus tetap terbaca sesi lain saat proses
+    # berjalan; tanpa ini stdout ditahan sampai proses keluar (25 Sep 2026:
+    # 30 menit tanpa satu baris pun, dikira menggantung).
+    sys.stdout.reconfigure(line_buffering=True)
 
     conn = koneksi(a.db)
     conn.row_factory = sqlite3.Row
@@ -210,7 +211,7 @@ def main() -> int:
     baris = conn.execute(
         "SELECT id, nama, nama_normal, fide_id, gelar, negara FROM pemain "
         "WHERE fide_id IS NOT NULL ORDER BY id").fetchall()
-    sasaran = [r for r in baris if a.semua or perlu_dirapikan(r["nama"])]
+    sasaran = [r for r in baris if a.semua or a.nama_resmi or perlu_dirapikan(r["nama"])]
     if a.batas:
         sasaran = sasaran[:a.batas]
 
@@ -222,19 +223,54 @@ def main() -> int:
     cache = muat_cache()
     diubah = dilewati = gagal = tidak_ada = 0
     unduh_baru = 0
+
+    # Tahap 1 — unduh dulu, TANPA kunci penulis. Inilah bagian yang lama
+    # (ribuan permintaan, jeda 1 detik, menunggu jaringan) dan ia tidak
+    # menyentuh database sama sekali. Sebelumnya kunci dipegang sepanjang
+    # unduhan: 25 Sep 2026 kunci tertahan 51 menit dan sesi lain tidak bisa
+    # menulis, padahal yang berjalan cuma menunggu Lichess.
+    gagal_ambil: set[str] = set()
     try:
         for i, r in enumerate(sasaran, 1):
             fid = r["fide_id"]
-            sudah_di_cache = fid in cache
+            if fid in cache:
+                continue
             try:
-                data = ambil_fide(fid, cache)
+                ambil_fide(fid, cache)
             except Exception as e:
                 gagal += 1
+                gagal_ambil.add(fid)
                 print(f"  [{i}/{len(sasaran)}] {r['nama']!r} fide {fid}: GAGAL {type(e).__name__}: {e}")
                 continue
-            if not sudah_di_cache:
-                unduh_baru += 1
-                time.sleep(JEDA)
+            unduh_baru += 1
+            time.sleep(JEDA)
+            if unduh_baru % 25 == 0:
+                simpan_cache(cache)
+            if unduh_baru % 100 == 0:
+                print(f"  ... {i}/{len(sasaran)} diperiksa, {unduh_baru} diunduh")
+    except KeyboardInterrupt:
+        simpan_cache(cache)
+        print("\ndihentikan pengguna saat mengunduh; yang sudah diunduh tersimpan di cache.")
+        return 1
+    simpan_cache(cache)
+    print(f"  unduhan selesai: {unduh_baru} baru, {gagal} gagal, sisanya dari cache.")
+
+    # Tahap 2 — putuskan dan tulis. Satu penulis besar pada satu waktu
+    # (CLAUDE.md bagian 7): impor atau analisis yang sedang jalan tidak boleh
+    # diadu dengan perubahan massal ini. Kunci diambil di sini, bukan di atas.
+    penjaga = None
+    if a.jalan:
+        try:
+            penjaga = KunciPenulis("rapikan nama dari FIDE").ambil()
+        except KunciTerpakai as e:
+            print(e)
+            return 1
+    try:
+        for i, r in enumerate(sasaran, 1):
+            fid = r["fide_id"]
+            if fid in gagal_ambil:
+                continue
+            data = cache.get(fid)
             if not data or not data.get("name"):
                 tidak_ada += 1
                 if not a.cadangan_pgn or not perlu_dirapikan(r["nama"]):
@@ -252,7 +288,7 @@ def main() -> int:
                     (normal, _id)).fetchone()
                 return f"id {b['id']} ({b['nama']!r})" if b else None
 
-            nama_baru, alasan = putuskan(r["nama"], data, cari_bentrok)
+            nama_baru, alasan = putuskan(r["nama"], data, cari_bentrok, a.nama_resmi)
             normal_baru = normalisasi_nama(nama_baru) if nama_baru else None
 
             if alasan:
@@ -283,6 +319,8 @@ def main() -> int:
         if a.jalan:
             conn.commit()
         simpan_cache(cache)
+        if penjaga:
+            penjaga.lepas()   # berkas .info tidak tertinggal basi setelah keluar
 
     print(f"\n{diubah} nama {'dirapikan' if a.jalan else 'akan dirapikan'}, "
           f"{dilewati} dilewati, {tidak_ada} tidak ada di FIDE, {gagal} gagal diunduh. "

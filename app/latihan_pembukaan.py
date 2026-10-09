@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from fastapi import APIRouter, Query
 
 from .db import koneksi
-from .posisi import SUMBER_GM
+from .posisi import SUMBER_GM, SYARAT_ANTAR_MANUSIA
 
 router = APIRouter(prefix="/api", tags=["latihan"])
 
@@ -71,16 +71,43 @@ def _skor_yang_jalan(menang_putih: int, remis: int, menang_hitam: int, giliran: 
     return round(100 * (menang + 0.5 * remis) / selesai, 1)
 
 
-def langkah_gm(conn, fen: str, sejak: str = SEJAK) -> list[dict]:
+def hasil_partai_gm(conn, sejak: str = SEJAK) -> dict[int, str]:
+    """
+    {partai_id: hasil} untuk SEMUA partai yang dihitung langkah_gm — sekali
+    saja per penghitungan, bukan disaring ulang tiap posisi.
+
+    Dulu tiap posisi (±1.200 per penghitungan) menggabungkan puluhan ribu baris
+    posisi dengan tabel partai dan pemain: 8 dari 9 detik, dan 37 detik saat
+    database belum ada di cache disk (diukur 27-29 Sep 2026).
+    """
+    return dict(conn.execute(
+        f"""SELECT g.id, g.hasil FROM partai g
+            WHERE g.sumber IN ({','.join('?' * len(SUMBER_GM))})
+              AND g.tanggal >= ? AND {SYARAT_ANTAR_MANUSIA}""",
+        [*SUMBER_GM, sejak]))
+
+
+def langkah_gm(conn, fen: str, sejak: str = SEJAK,
+               hasil_gm: dict[int, str] | None = None) -> list[dict]:
     """Langkah GM dari satu posisi, urut terbanyak, dengan porsi dan skor
-    DARI SUDUT YANG JALAN (bukan Putih seperti penjelajah pembukaan)."""
+    DARI SUDUT YANG JALAN (bukan Putih seperti penjelajah pembukaan).
+
+    `hasil_gm` (dari hasil_partai_gm) membuat posisi ini dibaca dari indeks
+    penutup posisi saja, tanpa JOIN; hasilnya sama persis dengan jalur SQL."""
+    if hasil_gm is not None:
+        return _langkah_gm_dari_peta(conn, fen, hasil_gm)
     baris = conn.execute(
         f"""
         SELECT p.langkah_uci, p.langkah_san, COUNT(*),
                SUM(g.hasil = '1-0'), SUM(g.hasil = '1/2-1/2'), SUM(g.hasil = '0-1')
-        FROM posisi p JOIN partai g ON g.id = p.partai_id
-        WHERE p.fen_kunci = ? AND g.sumber IN ({','.join('?' * len(SUMBER_GM))})
+        -- satu partai dihitung sekali walau posisinya berulang (audit 27 Sep,
+        -- sama dengan cari_langkah_langsung di app/posisi.py)
+        FROM (SELECT DISTINCT fen_kunci, langkah_san, langkah_uci, partai_id
+              FROM posisi WHERE fen_kunci = ?) p
+        JOIN partai g ON g.id = p.partai_id
+        WHERE g.sumber IN ({','.join('?' * len(SUMBER_GM))})
               AND g.tanggal >= ?
+              AND {SYARAT_ANTAR_MANUSIA}
         GROUP BY p.langkah_uci
         """,
         [fen, *SUMBER_GM, sejak],
@@ -91,6 +118,32 @@ def langkah_gm(conn, fen: str, sejak: str = SEJAK) -> list[dict]:
                "porsi": round(100 * r[2] / total, 1) if total else 0.0,
                "skor": _skor_yang_jalan(r[3] or 0, r[4] or 0, r[5] or 0, giliran)}
               for r in baris]
+    keluar.sort(key=lambda x: -x["n"])
+    return keluar
+
+
+def _langkah_gm_dari_peta(conn, fen: str, hasil_gm: dict[int, str]) -> list[dict]:
+    per_uci: dict[str, list] = {}
+    # DISTINCT sama dengan jalur SQL: satu partai sekali per langkah walau
+    # posisinya berulang (audit 27 Sep). Hanya kolom idx_posisi_fen_langkah.
+    for san, uci, pid in conn.execute(
+            "SELECT DISTINCT langkah_san, langkah_uci, partai_id FROM posisi WHERE fen_kunci = ?",
+            (fen,)):
+        hasil = hasil_gm.get(pid)
+        if hasil is None:
+            continue
+        r = per_uci.setdefault(uci, [san, 0, 0, 0, 0])
+        r[1] += 1
+        r[2] += hasil == "1-0"
+        r[3] += hasil == "1/2-1/2"
+        r[4] += hasil == "0-1"
+    total = sum(r[1] for r in per_uci.values())
+    giliran = fen.split()[1]
+    # urut uci dulu (= urutan GROUP BY jalur SQL), lalu stabil menurut jumlah
+    keluar = [{"uci": uci, "san": r[0], "n": r[1],
+               "porsi": round(100 * r[1] / total, 1) if total else 0.0,
+               "skor": _skor_yang_jalan(r[2], r[3], r[4], giliran)}
+              for uci, r in sorted(per_uci.items())]
     keluar.sort(key=lambda x: -x["n"])
     return keluar
 
@@ -151,6 +204,7 @@ def hitung_soal(conn, pemain_id: list[int], min_partai_gm: int = MIN_PARTAI_GM,
 
     # 2. telusuri sampai menyimpang atau keluar buku
     cache_gm: dict[str, list[dict]] = {}
+    hasil_gm = hasil_partai_gm(conn, sejak) if dipakai else {}
     temuan: dict[str, dict] = {}
     for pid, giliran_ray, baris in dipakai:
         info = partai[pid]
@@ -158,7 +212,7 @@ def hitung_soal(conn, pemain_id: list[int], min_partai_gm: int = MIN_PARTAI_GM,
             if dicapai[fen] < min_menyimpang:
                 break   # posisi yang hanya dicapai sekali tidak bisa jadi kebiasaan
             if fen not in cache_gm:
-                cache_gm[fen] = langkah_gm(conn, fen, sejak)
+                cache_gm[fen] = langkah_gm(conn, fen, sejak, hasil_gm)
             gm = cache_gm[fen]
             total = sum(x["n"] for x in gm)
             if total < min_partai_gm:

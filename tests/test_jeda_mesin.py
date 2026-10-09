@@ -112,6 +112,7 @@ class ProsesSungguhan(unittest.TestCase):
             self.assertFalse(jm._beku(p.pid))
         finally:
             p.kill()
+            p.wait(timeout=10)      # jangan tinggalkan proses hidup sesudah tes
 
 
 if __name__ == "__main__":

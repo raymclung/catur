@@ -31,6 +31,7 @@
     lihat: document.getElementById("lihat"),
     mulai: document.getElementById("mulai"),
     catatanMulai: document.getElementById("catatan-mulai"),
+    statusSlot: document.getElementById("status-slot"),
     pratinjau: document.getElementById("pratinjau"),
     angka: document.getElementById("angka-analisis"),
     bar: document.getElementById("bar-analisis"),
@@ -50,10 +51,19 @@
     statusPenjaga: document.getElementById("status-penjaga"),
     jam: document.getElementById("jam"),
     bagian: {
+      belum: document.getElementById("bagian-belum"),
       saya: document.getElementById("bagian-saya"),
       gm: document.getElementById("bagian-gm"),
       id: document.getElementById("bagian-id")
-    }
+    },
+    ringkasBelum: document.getElementById("ringkas-belum"),
+    /* Riwayat ANTREAN, beda dengan riwayat BATCH (#riwayat) di atas. Dulu
+       keduanya memakai kunci dan id yang sama, jadi baris batch masuk ke
+       daftar antrean, lalu dihapus lagi oleh gambarRiwayat(): tombol
+       Lanjutkan dan riwayat batch tidak pernah terlihat (audit 27 Sep 2026). */
+    bungkusRiwayatAntrean: document.getElementById("bungkus-riwayat-antrean"),
+    ringkasRiwayat: document.getElementById("ringkas-riwayat"),
+    riwayatAntrean: document.getElementById("daftar-riwayat")
   };
 
   var penyegar = null;
@@ -83,10 +93,11 @@
 
   function kelompok() {
     var t = document.querySelector('input[name="kelompok"]:checked');
-    return t ? t.value : "saya";
+    return t ? t.value : "belum";
   }
   function tampilkanBagian() {
     var k = kelompok();
+    el.bagian.belum.hidden = k !== "belum";
     el.bagian.saya.hidden = k !== "saya";
     el.bagian.gm.hidden = k !== "gm";
     el.bagian.id.hidden = k !== "id";
@@ -105,9 +116,19 @@
   }
 
   function saringan() {
-    var s = { terbaru: bilanganAtauNol(el.terbaru.value) || 25, profil: el.profil.value };
+    /* Kotak kosong = pakai bawaan yang sama dengan HTML (2.000), bukan 25:
+       kalau beda, batch diam-diam jadi jauh lebih kecil dari yang terlihat. */
+    var s = { terbaru: bilanganAtauNol(el.terbaru.value) || 2000, profil: el.profil.value };
     if (el.ulang.checked) s.ulang = true;
     var k = kelompok();
+    /* "Belum dianalisis" (Ray, 21 Sep 2026: "pilihan utama dengan langsung
+       analisa partai yang belum dianalisa"): TIDAK ada saringan sama sekali —
+       partai mana pun yang belum pernah dianalisis, yang terbaru dulu.
+       `pilih_partai()` memang sudah membuang partai yang punya baris analisis,
+       jadi cukup tidak mengirim saringan apa pun. */
+    if (k === "belum") {
+      return s;
+    }
     if (k === "saya") {
       if (el.hasil.value) s.hasil = el.hasil.value;
       if (el.format.value) s.format = el.format.value;
@@ -183,6 +204,10 @@
       " · RAM ~" + d.ram_mb + " MB · " + d.detik_per_ply + " detik per setengah langkah"));
     el.pratinjau.appendChild(atas);
 
+    /* Batch kembar sedang jalan: server memutar batch ini ke ujung yang
+       lain (terlama dulu) supaya keduanya tidak mengerjakan partai yang sama. */
+    if (d.catatan) el.pratinjau.appendChild(buat("div", "kecil", d.catatan));
+
     if (d.contoh && d.contoh.length) {
       var pre = buat("pre", "daftar-partai");
       pre.appendChild(teks(d.contoh.join("\n")));
@@ -229,11 +254,15 @@
     sibuk(true, el.mulai, "menjalankan…");
     kirim("/api/analisa/mulai", saringan()).then(function (d) {
       tampilkanPratinjau(d.pratinjau);
-      el.catatanMulai.textContent = "batch jalan (PID " + d.tugas.pid + ")";
+      el.catatanMulai.textContent = "batch jalan (PID " + d.tugas.pid + ")" +
+        (d.tugas.saringan && d.tugas.saringan.terlama ? " · dari partai terlama" : "");
       muatStatus();
     }).catch(function (e) {
       galat(e.message);
-    }).then(function () { sibuk(false, el.mulai); });
+    }).then(function () {
+      sibuk(false, el.mulai);
+      muatStatus();          // slot penuh = tombol dimatikan lagi, bukan menunggu 30 detik
+    });
   });
 
   /* ---------- status ---------- */
@@ -335,7 +364,7 @@
     var jalan = d.batch_berjalan || 0;
     if (!maks) {                       // server lama tanpa angka slot
       el.mulai.disabled = !!d.sibuk;
-      el.catatanMulai.textContent = d.sibuk ? "engine sedang dipakai batch lain" : "";
+      el.statusSlot.textContent = d.sibuk ? "engine sedang dipakai batch lain" : "";
       return;
     }
     el.mulai.disabled = !!d.sibuk;
@@ -348,8 +377,8 @@
       pesan += " — ini slot terakhir, mesin akan ramai";
       kelas = "kecil slot-hampir";
     }
-    el.catatanMulai.textContent = pesan;
-    el.catatanMulai.className = kelas;
+    el.statusSlot.textContent = pesan;
+    el.statusSlot.className = kelas;
   }
 
   function kotakAngka(nilai, label, kelas) {
@@ -362,6 +391,14 @@
   function tampilkanAngka(d, persen) {
     el.angka.textContent = "";
     el.angka.appendChild(kotakAngka(angka(d.partai_dianalisis), "partai sudah dianalisis"));
+    if (el.ringkasBelum) {
+      var sisa = (d.belum_saya || 0) + (d.belum_gm || 0);
+      el.ringkasBelum.textContent = sisa
+        ? "Sisa " + angka(sisa) + " partai belum dianalisis (" + angka(d.belum_saya) +
+          " punyamu, " + angka(d.belum_gm) + " GM). Yang terbaru dikerjakan dulu, tanpa saringan."
+        : "Semua partai sudah pernah dianalisis. Untuk memperdalam yang masih depth 10, "
+          + "pakai kelompok lain dengan profil hemat.";
+    }
     el.angka.appendChild(kotakAngka(angka(d.belum_saya), "partai saya belum",
       d.belum_saya ? "status-jarang" : ""));
     el.angka.appendChild(kotakAngka(angka(d.belum_gm), "partai GM belum",
@@ -476,13 +513,29 @@
   var WARNA_STATUS = { menunggu: "status-dipakai", jalan: "status-sama",
                        selesai: "status-sama", gagal: "status-skor", batal: "status-jarang" };
 
+  var SELESAI = ["selesai", "gagal", "batal"];
+
+  /* Satu berkas antrean memuat dua hal: pekerjaan yang akan dikerjakan dan
+     riwayat yang sudah lewat. Ray, 25 Sep 2026: "kenapa yang sudah beres bisa
+     dibuang?" — tombolnya memang cuma menghapus BARIS CATATAN, hasil analisis
+     di tabel `analisis` tidak tersentuh, tapi satu daftar campur membuatnya
+     terbaca seperti membuang pekerjaannya. Sekarang dipisah, dan nama
+     tombolnya ikut keadaan. */
   function gambarAntrean(d) {
-    var daftar = d.antrean || [];
+    var semua = d.antrean || [];
+    var daftar = semua.filter(function (k) { return SELESAI.indexOf(k.status) < 0; });
+    var riwayat = semua.filter(function (k) { return SELESAI.indexOf(k.status) >= 0; });
     el.daftarAntrean.textContent = "";
     if (!daftar.length) {
       el.daftarAntrean.appendChild(buat("div", "pesan kecil",
         "Antrean kosong. Susun saringan di kiri, lalu tekan “+ Antrekan”."));
     }
+    gambarBaris(daftar, el.daftarAntrean);
+    gambarRiwayat(riwayat);
+    gambarSisaAntrean(d);
+  }
+
+  function gambarBaris(daftar, wadah) {
     daftar.slice().reverse().forEach(function (k) {
       var b = buat("div", "tersimpan-baris");
       var isi = buat("div", "tersimpan-isi");
@@ -503,7 +556,11 @@
       if (k.alasan) isi.appendChild(buat("div", "kecil klas-blunder", k.alasan));
       b.appendChild(isi);
       if (k.status !== "jalan") {
-        var buang = buat("button", null, "Buang");
+        var lewat = SELESAI.indexOf(k.status) >= 0;
+        var buang = buat("button", null, lewat ? "Hapus dari daftar" : "Buang");
+        buang.title = lewat
+          ? "Hanya menghapus catatan ini dari daftar. Hasil analisisnya tetap tersimpan di database."
+          : "Pekerjaan ini batal dikerjakan.";
         buang.addEventListener("click", function () {
           buang.disabled = true;
           fetch("/api/analisa/antrean/" + k.id, { method: "DELETE" })
@@ -512,9 +569,36 @@
         });
         b.appendChild(buang);
       }
-      el.daftarAntrean.appendChild(b);
+      wadah.appendChild(b);
     });
+  }
 
+  function gambarRiwayat(riwayat) {
+    if (!el.riwayatAntrean) return;
+    el.riwayatAntrean.textContent = "";
+    el.bungkusRiwayatAntrean.hidden = !riwayat.length;
+    if (!riwayat.length) return;
+    el.ringkasRiwayat.textContent = "Riwayat (" + riwayat.length + " pekerjaan yang sudah lewat)";
+    var catatan = buat("div", "kecil redup",
+      "Sudah tidak akan dikerjakan lagi. “Hapus dari daftar” hanya membuang catatannya; " +
+      "hasil analisisnya tetap tersimpan di database.");
+    catatan.style.margin = "0 0 8px";
+    el.riwayatAntrean.appendChild(catatan);
+    var bersih = buat("button", null, "Bersihkan riwayat");
+    bersih.title = "Hapus semua catatan yang sudah selesai, gagal, atau batal sekaligus";
+    bersih.addEventListener("click", function () {
+      if (!window.confirm("Hapus " + riwayat.length + " catatan pekerjaan yang sudah lewat? " +
+                          "Hasil analisisnya tidak ikut terhapus.")) return;
+      bersih.disabled = true;
+      fetch("/api/analisa/antrean", { method: "DELETE" })
+        .then(function (r) { if (!r.ok) throw new Error("gagal"); muatAntrean(); })
+        .catch(function () { bersih.disabled = false; });
+    });
+    el.riwayatAntrean.appendChild(bersih);
+    gambarBaris(riwayat, el.riwayatAntrean);
+  }
+
+  function gambarSisaAntrean(d) {
     var h = d.hitung || {};
     el.ringkasAntrean.textContent = (h.menunggu || 0) + " menunggu" +
       (d.perkiraan_menit_sisa ? " · ~" + bilangWaktu(d.perkiraan_menit_sisa) : "");
@@ -527,15 +611,27 @@
     el.maksPenjaga.disabled = jalan;     // ubah batas = matikan dulu, lalu hidupkan lagi
   }
 
+  /* Dulu satu kali gagal (mis. server sedang di-restart) mematikan tombol
+     Antrekan dan penjaga sampai halaman dimuat ulang, dan jawaban 500
+     terbaca "antrean kosong". Sekarang hanya server tanpa rute antrean (404)
+     yang mematikannya; gagal lain ditulis apa adanya dan pulih sendiri di
+     penyegaran berikutnya. */
   function muatAntrean() {
-    return fetch("/api/analisa/antrean").then(function (r) { return r.json(); })
-      .then(gambarAntrean).catch(function () {
-        el.daftarAntrean.textContent = "";
-        el.daftarAntrean.appendChild(buat("div", "pesan kecil",
-          "Server ini belum punya antrean otomatis."));
-        el.jaga.disabled = true;
-        el.antrekan.disabled = true;
-      });
+    return fetch("/api/analisa/antrean").then(function (r) {
+      if (r.status === 404) throw { tanpaAntrean: true };
+      if (!r.ok) throw new Error("server menjawab " + r.status);
+      return r.json();
+    }).then(function (d) {
+      el.antrekan.disabled = false;
+      el.jaga.disabled = false;
+      gambarAntrean(d);
+    }).catch(function (e) {
+      el.daftarAntrean.textContent = "";
+      el.daftarAntrean.appendChild(buat("div", "pesan kecil", e && e.tanpaAntrean
+        ? "Server ini belum punya antrean otomatis."
+        : "Antrean gagal dibaca (" + (e && e.message ? e.message : "tidak terhubung") + "); dicoba lagi sebentar."));
+      el.jaga.disabled = el.antrekan.disabled = !!(e && e.tanpaAntrean);
+    });
   }
 
   el.antrekan.addEventListener("click", function () {
@@ -558,9 +654,12 @@
        makin berat laptopnya — satu batch ≈ 2 utas engine */
     fetch("/api/analisa/antrean/jaga?jalan=" + (hidupkan ? "true" : "false") +
           "&maks=" + encodeURIComponent(el.maksPenjaga.value), { method: "POST" })
-      .then(function (r) { return r.json(); })
+      .then(function (r) { if (!r.ok) throw new Error("server menjawab " + r.status); return r.json(); })
       .then(function () { el.jaga.disabled = false; muatAntrean(); })
-      .catch(function () { el.jaga.disabled = false; });
+      .catch(function (e) {
+        el.jaga.disabled = false;
+        galat("Penjaga gagal di" + (hidupkan ? "hidupkan" : "matikan") + ": " + e.message);
+      });
   });
 
   /* ---------- batas CPU ----------
@@ -583,7 +682,7 @@
   el.batasCpu.addEventListener("change", function () {
     el.batasCpu.disabled = true;
     fetch("/api/analisa/cpu?persen=" + encodeURIComponent(el.batasCpu.value), { method: "POST" })
-      .then(function (r) { return r.json(); })
+      .then(function (r) { if (!r.ok) throw new Error("server menjawab " + r.status); return r.json(); })
       .then(tulisKetCpu)
       .catch(function (e) { galat("Batas CPU gagal diubah: " + e.message); })
       .then(function () { el.batasCpu.disabled = false; });
@@ -633,7 +732,8 @@
 
       muatAntrean();
       muatPembantu();
-      atur(d.sibuk ? 5000 : 30000);
+      /* `sibuk` = SEMUA slot penuh; kemajuan satu batch pun perlu segar. */
+      atur(d.batch_berjalan || d.sibuk ? 5000 : 30000);
       return d;
     }).catch(function () {
       el.catatanKemajuan.textContent = "gagal membaca status server";
@@ -724,6 +824,10 @@
 
   function atur(jeda) {
     if (penyegar) clearInterval(penyegar);
+    penyegar = null;
+    /* Permintaan yang sudah terbang saat tab disembunyikan tidak boleh
+       menyalakan penyegar lagi di tab yang tersembunyi. */
+    if (document.hidden) return;
     penyegar = setInterval(muatStatus, jeda);
   }
 
@@ -768,6 +872,18 @@
     if (uji.get("hasil")) el.hasil.value = uji.get("hasil");
     if (uji.get("format")) el.format.value = uji.get("format");
   }
+
+  /* Isian berubah = hasil "Lihat dulu" tidak berlaku lagi. Dulu hanya
+     ganti kelompok yang menyembunyikannya, jadi Ray bisa melihat
+     "2.000 partai · 3 jam" untuk profil cepat, mengganti ke dalam, lalu
+     menekan Mulai dengan perkiraan yang salah (audit 27 Sep 2026). */
+  (function () {
+    var kartu = el.lihat.closest(".mesin-isi");
+    if (!kartu) return;
+    function basi(ev) { if (ev.target !== el.batasCpu) el.pratinjau.hidden = true; }
+    kartu.addEventListener("input", basi);
+    kartu.addEventListener("change", basi);
+  })();
 
   prasetel();
   tampilkanBagian();

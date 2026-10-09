@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from app.db import buat_skema, koneksi
-from app.impor import (impor_teks, normalisasi_nama, periksa_jejak,
+from app.impor import (EVENT_PAPAN, impor_teks, normalisasi_nama, periksa_jejak,
                        sidik_partai, turnamen_dari_header)
 
 AKAR = Path(__file__).resolve().parents[1]
@@ -65,8 +65,51 @@ class UjiDedup(DasarImpor):
         self.assertEqual(self.jumlah("partai"), 0)
 
 
+class UjiEloNol(DasarImpor):
+    """Audit 27 Sep: siaran menulis Elo "0" untuk pemain tanpa rating; 51 partai
+    tersimpan 0 dan merusak saringan serta rata-rata Elo."""
+
+    def test_elo_nol_disimpan_null(self):
+        impor_teks(self.conn, pgn(hasil="1-0", tambahan='[WhiteElo "0"]\n[BlackElo "2710"]'),
+                   "lichess-broadcast")
+        r = self.conn.execute("SELECT elo_putih, elo_hitam FROM partai").fetchone()
+        self.assertEqual((r[0], r[1]), (None, 2710))
+
+    def test_elo_nol_pada_pembaruan_broadcast(self):
+        impor_teks(self.conn, pgn(hasil="*", langkah="1. e4 e5"), "lichess-broadcast")
+        impor_teks(self.conn, pgn(hasil="1-0", langkah="1. e4 e5 2. Nf3",
+                                  tambahan='[WhiteElo "2700"]\n[BlackElo "0"]'),
+                   "lichess-broadcast")
+        r = self.conn.execute("SELECT elo_putih, elo_hitam FROM partai").fetchone()
+        self.assertEqual((r[0], r[1]), (2700, None))
+
+
 class UjiBroadcastBelumSelesai(DasarImpor):
     """Partai yang sama diambil saat masih berjalan, lalu setelah selesai."""
+
+    def test_analisis_dan_posisi_versi_terpotong_dibuang(self):
+        """Audit 27 Sep: 103 partai selesai membawa analisis versi '*'-nya."""
+        from app.posisi import id_belum_terindeks, indeks_partai
+        impor_teks(self.conn, pgn(hasil="*", langkah="1. e4 e5"), "lichess-broadcast")
+        pid = self.conn.execute("SELECT id FROM partai").fetchone()[0]
+        indeks_partai(self.conn, pid, self.conn.execute("SELECT pgn FROM partai").fetchone()[0])
+        self.conn.execute("INSERT INTO analisis(partai_id,engine,depth,profil,dianalisis_pada) "
+                          "VALUES(?,'uji',10,'cepat','2026-01-01')", (pid,))
+        self.conn.execute("INSERT INTO analisis_langkah(partai_id,ply,nomor_langkah,warna,san,uci,"
+                          "eval_sebelum_cp,eval_sesudah_cp,eval_putih_cp,kehilangan_cp,klasifikasi) "
+                          "VALUES(?,0,1,'putih','e4','e2e4',20,15,15,5,'baik')", (pid,))
+        self.conn.commit()
+
+        h = impor_teks(self.conn, pgn(hasil="1-0", langkah="1. e4 e5 2. Nf3 Nc6 3. Bb5"),
+                       "lichess-broadcast")
+        self.assertEqual(h.diperbarui, 1)
+        for tabel in ("analisis", "analisis_langkah"):
+            with self.subTest(tabel=tabel):
+                self.assertEqual(self.conn.execute(
+                    f"SELECT COUNT(*) FROM {tabel} WHERE partai_id = ?", (pid,)).fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM posisi WHERE partai_id = ?", (pid,)).fetchone()[0], 5)
+        self.assertEqual(id_belum_terindeks(self.conn), [])
 
     def test_versi_selesai_menimpa_versi_berjalan(self):
         impor_teks(self.conn, pgn(hasil="*", langkah="1. e4 e5"), "lichess-broadcast")
@@ -128,6 +171,69 @@ class UjiTurnamen(DasarImpor):
     def test_site_url_bukan_lokasi(self):
         impor_teks(self.conn, pgn(hasil="1-0", site="https://lichess.org/abc"), "lichess-user")
         self.assertIsNone(self.conn.execute("SELECT lokasi FROM turnamen").fetchone()[0])
+
+
+class UjiEventLabelPapan(DasarImpor):
+    """
+    Tag Event yang isinya label PAPAN tidak boleh jadi nama turnamen.
+
+    Ditemukan 25 Sep 2026: PGN siaran Lichess kadang menulis
+    "Round 1: Vrolijk, Liam - Ernst, Sipke" di tag Event untuk sebagian papan
+    dalam ronde yang SAMA, jadi satu ronde Dutch Meesterklasse pecah menjadi
+    18 baris `turnamen`. Di seluruh database saat itu: 3.362 baris turnamen
+    bernama seperti ini, menyangkut 3.431 partai.
+    """
+
+    def test_label_papan_dikenali(self):
+        for ev in ("Round 1: Vrolijk, Liam - Ernst, Sipke",
+                   "Round 3: Brixius, Dirk - Cloete, Willem Francois",
+                   "round 12: A, B - C, D",
+                   # Varian dengan bagian di tengah, dari duel Kasparov-Topalov
+                   "Round 1 | Rapid: Topalov, Veselin - Kasparov, Garry",
+                   "Round 11 | Blitz: Topalov, Veselin - Kasparov, Garry",
+                   "new tournament description"):
+            with self.subTest(ev=ev):
+                self.assertTrue(EVENT_PAPAN.match(ev))
+
+    def test_nama_turnamen_asli_tidak_ikut_kena(self):
+        # Nama turnamen asli yang memang memuat titik dua tidak boleh ikut kena.
+        for ev in ("Meesterklasse 2026-2027", "Olymp 2026 Open",
+                   "Round Robin Masters 2026", "Tata Steel Masters 2026",
+                   "Armageddon: Chess for TV", "Checkmate: USA vs India",
+                   "Clutch Chess: Champions", "Clutch Chess: The Legends",
+                   "Room 1 : Pra Lebaran 1441 H Arena",
+                   "46th FIDE Chess Olympiad Samarkand 2026 | Open | Matches 1-12"):
+            with self.subTest(ev=ev):
+                self.assertFalse(EVENT_PAPAN.match(ev))
+
+    def test_label_papan_bukan_turnamen(self):
+        self.assertEqual(turnamen_dari_header({"Event": "Round 1: A, B - C, D"}), (None, None))
+
+    def test_label_papan_tidak_membuat_baris_turnamen(self):
+        impor_teks(self.conn, pgn(event="Round 1: Carlsen, Magnus - Nakamura, Hikaru"),
+                   sumber="lichess-broadcast")
+        self.assertEqual(self.jumlah("turnamen"), 0)
+        self.assertEqual(self.jumlah("partai"), 1)
+
+    def test_nama_paksa_menang_atas_event(self):
+        # Satu ronde siaran = satu turnamen, walau tag Event-nya berbeda-beda.
+        teks = (pgn(event="Meesterklasse 2026-2027", putih="Bok, Benjamin", hitam="Giri, Anish")
+                + pgn(event="Round 1: Vrolijk, Liam - Ernst, Sipke", babak="1.4",
+                      putih="Vrolijk, Liam", hitam="Ernst, Sipke")
+                + pgn(event="Meesterklasse 202627", babak="1.5",
+                      putih="Werle, Jan", hitam="Kunin, Vitaly"))
+        impor_teks(self.conn, teks, sumber="lichess-broadcast",
+                   nama_turnamen_paksa="Meesterklasse 2026-2027")
+        self.assertEqual(self.jumlah("partai"), 3)
+        self.assertEqual(self.jumlah("turnamen"), 1)
+        nama = self.conn.execute("SELECT nama FROM turnamen").fetchone()[0]
+        self.assertEqual(nama, "Meesterklasse 2026-2027")
+
+    def test_tanpa_nama_paksa_event_biasa_tetap_dipakai(self):
+        impor_teks(self.conn, pgn(event="Tata Steel Masters 2026"), sumber="twic")
+        self.assertEqual(
+            self.conn.execute("SELECT nama FROM turnamen").fetchone()[0],
+            "Tata Steel Masters 2026")
 
 
 class UjiNormalisasiNama(unittest.TestCase):
@@ -252,3 +358,172 @@ class UjiJejakAsal(DasarImpor):
             "SELECT sumber_url FROM partai").fetchone()["sumber_url"])
         self.assertEqual(self.conn.execute(
             "SELECT url FROM sumber_impor").fetchone()["url"], None)
+
+
+class UjiAngkaDariTag(unittest.TestCase):
+    """ke_int memotong "12345" jadi 1234 (audit 27 Sep 2026)."""
+
+    def test_ke_int_membaca_semua_digit(self):
+        from app.impor_bantu import ke_int
+        self.assertEqual(ke_int("12345"), 12345)
+        self.assertEqual(ke_int("2710"), 2710)
+        self.assertEqual(ke_int(" 2650 (prov)"), 2650)
+        self.assertIsNone(ke_int("?"))
+
+    def test_ke_elo_menolak_yang_mustahil(self):
+        from app.impor_bantu import ke_elo
+        self.assertEqual(ke_elo("2850"), 2850)
+        self.assertIsNone(ke_elo("0"))
+        self.assertIsNone(ke_elo("12345"))       # dulu tersimpan sebagai 1234
+
+
+# 16 langkah penuh: di atas KEMBAR_MIN_LANGKAH (partai "panjang")
+PANJANG = ("1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 7. Bb3 d6 "
+           "8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 11. Nbd2 Bb7 12. Bc2 Re8 13. Nf1 Bf8 "
+           "14. Ng3 g6 15. a4 c5 16. d5 c4")
+PENDEK = "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7"
+
+
+def pgn_tgl(tanggal, putih="Caruana, Fabiano", hitam="Giri, Anish", langkah=PANJANG,
+            hasil="1/2-1/2", tambahan=""):
+    return (f'[Event "Uji"]\n[Date "{tanggal}"]\n[Round "1"]\n[White "{putih}"]\n'
+            f'[Black "{hitam}"]\n[Result "{hasil}"]\n{tambahan}\n{langkah} {hasil}\n\n')
+
+
+class UjiKembarLintasSumber(DasarImpor):
+    """Audit 27 Sep 2026: 500-an partai tersimpan dua kali karena siaran dan
+    TWIC menulis tanggal berbeda (Candidates 2026: 2 Mar vs 15 Apr)."""
+
+    def test_tanggal_beda_sumber_beda_tetap_duplikat(self):
+        impor_teks(self.conn, pgn_tgl("2026.03.02"), "lichess-broadcast")
+        h = impor_teks(self.conn, pgn_tgl("2026.04.15", putih="Caruana,F", hitam="Giri,A"), "twic")
+        self.assertEqual((h.baru, h.duplikat), (0, 1))
+        self.assertEqual(self.jumlah("partai"), 1)
+
+    def test_garis_berulang_di_tahun_lain_bukan_duplikat(self):
+        """So-Vachier-Lagrave: 25 langkah identik di blitz 2023, 2024, 2026."""
+        impor_teks(self.conn, pgn_tgl("2024.08.16"), "twic")
+        h = impor_teks(self.conn, pgn_tgl("2026.05.07"), "lichess-broadcast")
+        self.assertEqual(h.baru, 1)
+
+    def test_partai_pendek_hanya_kembar_kalau_tanggalnya_dekat(self):
+        impor_teks(self.conn, pgn_tgl("2026.03.02", langkah=PENDEK), "lichess-broadcast")
+        jauh = impor_teks(self.conn, pgn_tgl("2026.03.20", langkah=PENDEK), "twic")
+        self.assertEqual(jauh.baru, 1)
+        dekat = impor_teks(self.conn, pgn_tgl("2026.03.04", langkah=PENDEK), "pgnmentor")
+        self.assertEqual(dekat.duplikat, 1)
+
+    def test_sumber_sama_tidak_dianggap_kembar(self):
+        """Dua ronde berbeda satu turnamen boleh punya langkah yang sama."""
+        impor_teks(self.conn, pgn_tgl("2026.03.02"), "twic")
+        h = impor_teks(self.conn, pgn_tgl("2026.03.05"), "twic")
+        self.assertEqual(h.baru, 1)
+
+    def test_putih_sama_dengan_hitam_dilewati(self):
+        tambahan = '[WhiteFideId "651081709"]\n[BlackFideId "651081709"]'
+        h = impor_teks(self.conn, pgn_tgl("2026.07.20", putih="Tureshbayev, Anuar",
+                                          hitam="Tureshbayev, Anuar", tambahan=tambahan),
+                       "lichess-broadcast")
+        self.assertEqual((h.baru, h.dilewati), (0, 1))
+
+
+class UjiInisialAmbigu(DasarImpor):
+    """49 partai 'Anand,Vignesh' (Elo ~2030) masuk ke 'Anand,V' lalu ke Vishy."""
+
+    def impor(self, putih, tanggal):
+        impor_teks(self.conn, pgn_tgl(tanggal, putih=putih, hitam="Lawan, Satu", langkah=PENDEK),
+                   "pgnmentor")
+
+    def id_putih(self, nama):
+        import re
+        for pid, pgn in self.conn.execute("SELECT putih_id, pgn FROM partai"):
+            if re.search(r'\[White "([^"]*)"\]', pgn).group(1) == nama:
+                return pid
+        raise AssertionError(nama)
+
+    def test_urutan_lengkap_dulu(self):
+        self.impor("Anand, Viswanathan", "2024.01.01")
+        self.impor("Anand,V", "2024.01.02")
+        self.impor("Anand,Vignesh", "2024.01.03")
+        self.assertEqual(self.id_putih("Anand,V"), self.id_putih("Anand, Viswanathan"))
+        self.assertNotEqual(self.id_putih("Anand,Vignesh"), self.id_putih("Anand, Viswanathan"))
+
+    def test_urutan_singkatan_dulu(self):
+        """Nama Viswanathan hanya ada di PGN baris 'Anand,V': tetap terlihat."""
+        self.impor("Anand,V", "2024.01.01")
+        self.impor("Anand, Viswanathan", "2024.01.02")
+        self.impor("Anand,Vignesh", "2024.01.03")
+        self.assertEqual(self.id_putih("Anand, Viswanathan"), self.id_putih("Anand,V"))
+        self.assertNotEqual(self.id_putih("Anand,Vignesh"), self.id_putih("Anand,V"))
+
+    def test_singkatan_tanpa_saingan_tetap_cocok(self):
+        self.impor("Aronian,L", "2024.01.01")
+        self.impor("Aronian, Levon", "2024.01.02")
+        self.assertEqual(self.id_putih("Aronian, Levon"), self.id_putih("Aronian,L"))
+
+    def test_nama_konsultasi_tidak_dicocokkan_lewat_inisial(self):
+        self.impor("Anand,V", "2024.01.01")
+        self.impor("Anand,Viswanathan:Borgialli,Mihail Harasic", "2024.01.02")
+        self.assertNotEqual(self.id_putih("Anand,Viswanathan:Borgialli,Mihail Harasic"),
+                            self.id_putih("Anand,V"))
+
+
+class UjiIsiPgnDiperiksa(DasarImpor):
+    """Audit 28 Sep 2026: semua kasus di bawah ini dulu diterima diam-diam."""
+
+    def test_varian_bukan_catur_ditolak_dengan_alasan(self):
+        for varian in ("Crazyhouse", "Atomic", "Three-check", "Antichess"):
+            h = impor_teks(self.conn, pgn(hasil="1-0", putih=varian, tambahan=f'[Variant "{varian}"]'), "file")
+            self.assertEqual(h.baru, 0, varian)
+            self.assertTrue(any("varian" in k for k in h.alasan_dilewati), h.alasan_dilewati)
+        self.assertEqual(self.jumlah("partai"), 0)
+
+    def test_chess960_dan_standard_tetap_diterima(self):
+        for i, varian in enumerate(("Standard", "Chess960", "chess 960")):
+            h = impor_teks(self.conn, pgn(hasil="1-0", babak=str(i), putih=f"P{i}, A",
+                                          tambahan=f'[Variant "{varian}"]'), "file")
+            self.assertEqual(h.baru, 1, (varian, h.alasan_dilewati))
+
+    def test_fen_tanpa_raja_ditolak(self):
+        h = impor_teks(self.conn, pgn(hasil="1-0", langkah="1. e3",
+                                      tambahan='[SetUp "1"]\n[FEN "8/8/8/8/8/8/4P3/8 w - - 0 1"]'), "file")
+        self.assertEqual(h.baru, 0)
+
+    def test_hasil_tidak_sah_ditolak(self):
+        h = impor_teks(self.conn, pgn(hasil="2-0"), "file")
+        self.assertEqual(h.baru, 0)
+        self.assertIn("hasil tidak sah (2-0)", h.alasan_dilewati)
+
+    def test_tanggal_bukan_tanggal_jadi_null(self):
+        teks = pgn(hasil="1-0").replace('[Date "2026.06.01"]', '[Date "abcd"]')
+        self.assertEqual(impor_teks(self.conn, teks, "file").baru, 1)
+        self.assertIsNone(self.conn.execute("SELECT tanggal FROM partai").fetchone()[0])
+
+    def test_fide_id_sama_beda_nama_ditolak(self):
+        h = impor_teks(self.conn, pgn(hasil="1-0", putih="Kembar, A", hitam="Kembar, B",
+                                      tambahan='[WhiteFideId "999"]\n[BlackFideId "999"]'), "file")
+        self.assertEqual(h.baru, 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM partai WHERE putih_id = hitam_id")
+                         .fetchone()[0], 0)
+
+    def test_komentar_tak_ditutup_tidak_menelan_partai_berikutnya(self):
+        teks = (pgn(hasil="1-0", putih="M1, A") +
+                pgn(hasil="1-0", putih="M2, A", langkah="1. e4 { komentar tak ditutup e5 2. Nf3") +
+                pgn(hasil="0-1", putih="M3, A") + pgn(hasil="1/2-1/2", putih="M4, A"))
+        h = impor_teks(self.conn, teks, "file")
+        nama = {r[0] for r in self.conn.execute(
+            "SELECT p.nama FROM partai g JOIN pemain p ON p.id = g.putih_id")}
+        self.assertEqual(nama, {"M1, A", "M3, A", "M4, A"})
+        self.assertIn("PGN rusak: komentar { tidak ditutup", h.alasan_dilewati)
+
+    def test_galat_satu_partai_tidak_menggagalkan_unggahan(self):
+        """Surrogate tunggal (sah di JSON, tidak bisa disimpan SQLite) dulu jadi
+        500 setelah partai-partai sebelumnya ter-commit."""
+        teks = pgn(hasil="1-0", putih="Baik, A") + pgn(hasil="1-0", putih="Rusak\udc80, A") \
+            + pgn(hasil="0-1", putih="Baik, B")
+        h = impor_teks(self.conn, teks, "file")
+        self.assertEqual(h.baru, 2)
+        self.assertEqual(h.dilewati, 1)
+        self.assertEqual(self.jumlah("partai"), 2)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pemain WHERE nama LIKE 'Rusak%'")
+                         .fetchone()[0], 0, "pemain dari partai yang batal ikut dibatalkan")

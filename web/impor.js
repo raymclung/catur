@@ -415,4 +415,52 @@
   el.url.addEventListener("keydown", function (ev) {
     if (ev.key === "Enter") { ev.preventDefault(); el.kirimUrl.click(); }
   });
+
+  /* ---------- partai GM terkenal minggu ini (POST/GET /api/impor/mingguan) ----------
+     Proses lepas di server; halaman ini hanya memulai dan membaca log-nya. */
+
+  var elMingguan = {
+    status: document.getElementById("status-mingguan"),
+    tombol: document.getElementById("mulai-mingguan"),
+    log: document.getElementById("log-mingguan")
+  };
+  var penyegarMingguan = null;
+
+  function muatMingguan() {
+    return fetch("/api/impor/mingguan").then(function (r) { return r.json(); }).then(function (d) {
+      var t = d.terakhir;
+      if (d.jalan) {
+        elMingguan.status.textContent = "Sedang memperbarui sejak " + d.mulai + "…";
+        elMingguan.status.className = "kecil";
+      } else if (t) {
+        var lama = d.hari_lalu === null ? "" : d.hari_lalu === 0 ? " (hari ini)" : " (" + d.hari_lalu + " hari lalu)";
+        elMingguan.status.textContent = "Terakhir " + t.selesai + lama + ": " + angka(t.baru) + " partai baru, " +
+          angka(t.dibuang) + " dibuang karena tidak ada pemain Elo 2500 ke atas, " +
+          angka(t.dianalisis_lichess) + " langsung dianalisis Lichess.";
+        elMingguan.status.className = "kecil " + (d.hari_lalu >= 7 ? "slot-hampir" : "redup");
+      } else {
+        elMingguan.status.textContent = "Belum pernah diperbarui.";
+        elMingguan.status.className = "kecil slot-hampir";
+      }
+      elMingguan.tombol.disabled = d.jalan;
+      elMingguan.log.hidden = !(d.ekor_log && d.ekor_log.length) || !d.jalan;
+      elMingguan.log.textContent = (d.ekor_log || []).join("\n");
+      if (d.jalan && !penyegarMingguan) penyegarMingguan = setInterval(muatMingguan, 5000);
+      if (!d.jalan && penyegarMingguan) { clearInterval(penyegarMingguan); penyegarMingguan = null; }
+    }).catch(function () {
+      elMingguan.status.textContent = "Server ini belum punya fitur pembaruan mingguan.";
+      elMingguan.tombol.disabled = true;
+    });
+  }
+
+  elMingguan.tombol.addEventListener("click", function () {
+    galat("");
+    elMingguan.tombol.disabled = true;
+    kirim("/api/impor/mingguan", {}).then(muatMingguan).catch(function (e) {
+      galat(e.message);
+      elMingguan.tombol.disabled = false;
+    });
+  });
+
+  muatMingguan();
 })();

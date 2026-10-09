@@ -9,7 +9,7 @@ AKAR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AKAR))
 
 from app.db import buat_skema, koneksi, sekarang
-from app.repositori import _butuh_join, ambil_partai, cari_partai
+from app.repositori import _butuh_join, ambil_partai, cari_partai, cari_pemain, pola_like
 
 
 class UjiSaringanHasil(unittest.TestCase):
@@ -92,6 +92,13 @@ class UjiSaringanPosisiDanSumber(unittest.TestCase):
     def test_sumber_gm_tanpa_fen(self):
         d = cari_partai(self.conn, sumber="gm")
         self.assertEqual(sorted(g["id"] for g in d["partai"]), [1, 3])
+
+    def test_sumber_gm_tanpa_partai_mesin(self):
+        """Kasparov-Deep Blue (pemain.jenis = 'mesin') bukan partai GM; penjelajah
+        sudah menyaringnya, daftar partai belum (audit 27 Sep 2026: 16 partai)."""
+        self.conn.execute("UPDATE pemain SET jenis = 'mesin' WHERE id = 2")
+        self.assertEqual(cari_partai(self.conn, sumber="gm")["partai"], [])
+        self.assertEqual(cari_partai(self.conn)["total"], 3)      # tanpa saringan tetap ada
 
     def test_posisi_awal_semua_partai(self):
         import chess
@@ -202,3 +209,47 @@ class UjiTotalTanpaJoin(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UjiPencarianDanTanggal(unittest.TestCase):
+    """Audit 27 Sep 2026: % dan _ tidak di-escape; tanggal '??' terurut terbaru."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = koneksi(Path(self.tmp.name) / "uji.db")
+        buat_skema(self.conn)
+        t = sekarang()
+        for id_, nama in ((1, "McLung_07"), (2, "McLungX07"), (3, "Diskon 50%"), (4, "Biasa")):
+            self.conn.execute("INSERT INTO pemain(id,nama,nama_normal,dibuat_pada) VALUES(?,?,?,?)",
+                              (id_, nama, nama.lower(), t))
+        for id_, tanggal in ((1, "2023.12.31"), (2, "2023.??.??"), (3, "2023.06.??"), (4, "2022.01.01")):
+            self.conn.execute(
+                "INSERT INTO partai(id,putih_id,hitam_id,hasil,pgn,sumber,hash_unik,diimpor_pada,tanggal) "
+                "VALUES(?,1,4,'1-0','x','uji',?,?,?)", (id_, f"h{id_}", t, tanggal))
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def nama(self, cari):
+        return sorted(p["nama"] for p in cari_pemain(self.conn, cari))
+
+    def test_persen_dan_garis_bawah_harfiah(self):
+        self.assertEqual(self.nama("%"), ["Diskon 50%"])
+        self.assertEqual(self.nama("_"), ["McLung_07"])
+        self.assertEqual(self.nama("Lung_0"), ["McLung_07"])      # dulu McLungX07 ikut
+        self.assertEqual(self.nama("lung"), ["McLungX07", "McLung_07"])
+
+    def test_pola_like(self):
+        self.assertEqual(pola_like("a%b_c\\"), "%a\\%b\\_c\\\\%")
+        self.assertEqual(pola_like("A1", awal=False), "A1%")
+
+    def test_cari_partai_tidak_menganggap_persen_wildcard(self):
+        self.assertEqual(cari_partai(self.conn, cari="%")["total"], 0)
+
+    def test_tanggal_tak_diketahui_tidak_terurut_teratas(self):
+        terbaru = [g["tanggal"] for g in cari_partai(self.conn, urut="terbaru")["partai"]]
+        self.assertEqual(terbaru, ["2023.12.31", "2023.06.??", "2023.??.??", "2022.01.01"])
+        terlama = [g["tanggal"] for g in cari_partai(self.conn, urut="terlama")["partai"]]
+        self.assertEqual(terlama, ["2022.01.01", "2023.??.??", "2023.06.??", "2023.12.31"])

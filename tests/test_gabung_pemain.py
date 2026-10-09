@@ -42,12 +42,13 @@ class GabungPemain(unittest.TestCase):
             "VALUES (?,?,?,1,'2026-09-12')", (nama, nama_normal, fide_id))
         return cur.lastrowid
 
-    def tambah_partai(self, putih_id, hitam_id, elo_putih, elo_hitam, tanggal, pgn=""):
+    def tambah_partai(self, putih_id, hitam_id, elo_putih, elo_hitam, tanggal, pgn="",
+                      sumber="twic"):
         cur = self.conn.execute(
             "INSERT INTO partai(putih_id, hitam_id, tanggal, hasil, elo_putih, elo_hitam, "
             "jumlah_langkah, pgn, sumber, hash_unik, diimpor_pada) "
-            "VALUES (?,?,?,'1-0',?,?,3,?,'twic',?,'2026-09-12')",
-            (putih_id, hitam_id, tanggal, elo_putih, elo_hitam, pgn,
+            "VALUES (?,?,?,'1-0',?,?,3,?,?,?,'2026-09-12')",
+            (putih_id, hitam_id, tanggal, elo_putih, elo_hitam, pgn, sumber,
              f"hash{putih_id}-{hitam_id}-{tanggal}"))
         return cur.lastrowid
 
@@ -184,17 +185,6 @@ class GabungTanpaFideId(GabungPemain):
         self.tambah_partai(mentor, lawan, 2758, 2600, "2019.04.01")
         self.assertEqual(len(cari_pasangan_tanpa_fide(self.conn)), 1)
 
-    def test_dua_calon_tidak_ditebak(self):
-        # 'Aronian,L' bisa berarti Levon atau Laurel -> biarkan terpisah.
-        levon = self.tambah_pemain("Aronian, Levon", "aronian levon", "13300474")
-        laurel = self.tambah_pemain("Aronian, Laurel", "aronian laurel", "13300999")
-        mentor = self.tambah_tanpa_fide("Aronian,L", "aronian l")
-        lawan = self.tambah_pemain("Lawan, C", "lawan c", "777")
-        self.tambah_partai(levon, lawan, 2780, 2600, "2015.01.01")
-        self.tambah_partai(laurel, lawan, 2100, 2600, "2015.02.01")
-        self.tambah_partai(mentor, lawan, 2782, 2600, "2015.03.01")
-        self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
-
     def test_elo_jauh_beda_tidak_digabung(self):
         # Magnus vs ayahnya Henrik: nama belakang sama, inisial beda pun tidak
         # lolos, tapi ini menguji pengaman Elo untuk inisial yang cocok.
@@ -204,16 +194,6 @@ class GabungTanpaFideId(GabungPemain):
         self.tambah_partai(kuat, lawan, 2780, 2600, "2015.01.01")
         self.tambah_partai(lemah, lawan, 2050, 2600, "2015.02.01")
         self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
-
-    def test_baris_tanpa_fide_tidak_saling_digabung(self):
-        a = self.tambah_tanpa_fide("Popov,I", "popov i")
-        b = self.tambah_tanpa_fide("Popov, Ivan", "popov ivan")
-        lawan = self.tambah_pemain("Lawan, E", "lawan e", "444")
-        self.tambah_partai(a, lawan, 2600, 2500, "2018.01.01")
-        self.tambah_partai(b, lawan, 2605, 2500, "2018.02.01")
-        self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
-
-    # ---------- angka penanda TWIC (13 Sep 2026) ----------
 
     def test_angka_penanda_twic_digabung_kalau_elo_membuktikan(self):
         """'Fedoseev,Vl3' (379 partai) adalah Vladimir Fedoseev: Elo 2012 sama."""
@@ -243,22 +223,168 @@ class GabungTanpaFideId(GabungPemain):
         self.tambah_partai(twic, lawan, 2150, 2500, "2019.02.01")
         self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
 
-    def test_batas_username_mirip_tanpa_fide_tidak_pernah_digabung(self):
-        """Batas yang dicatat, bukan disembunyikan (CLAUDE.md bagian 1).
+    def test_dua_calon_hanya_satu_berbukti_dipakai(self):
+        """
+        Diubah 25 Sep 2026: yang memutuskan bukti, bukan jumlah calon.
 
-        Audit 13 Sep: di antara sesama baris tanpa FIDE ID, bukti Elo meloloskan
-        'Cabe-pedas' + 'Cabe-pedas165' — dua username online yang berbeda. Maka
-        sesama baris tanpa FIDE ID tetap tidak digabung, walau Elo-nya dekat;
-        akibatnya pasangan asli seperti 'Larsen,B' / 'Larsen, Bent' juga tetap
-        terpisah.
+        Versi lama menolak 'Aronian,L' hanya karena ada dua Aronian bernama L,
+        walau Elo Laurel (2100) jelas bukan Elo si baris singkatan (2782).
+        Aturan "calon harus tepat satu" itulah yang membuat 'Larsen,B' dan
+        'Short,N' dilewati diam-diam di database sungguhan. Sekarang calon
+        yang Elo-nya tidak cocok gugur lebih dulu, dan yang tersisa tepat satu.
+        """
+        levon = self.tambah_pemain("Aronian, Levon", "aronian levon", "13300474")
+        laurel = self.tambah_pemain("Aronian, Laurel", "aronian laurel", "13300999")
+        mentor = self.tambah_tanpa_fide("Aronian,L", "aronian l")
+        lawan = self.tambah_pemain("Lawan, C", "lawan c", "777")
+        self.tambah_partai(levon, lawan, 2780, 2600, "2015.01.01")
+        self.tambah_partai(laurel, lawan, 2100, 2600, "2015.02.01")
+        self.tambah_partai(mentor, lawan, 2782, 2600, "2015.03.01")
+        pasangan = cari_pasangan_tanpa_fide(self.conn)
+        self.assertEqual([(s["id"], b["id"]) for s, b, _ in pasangan], [(levon, mentor)])
+
+    def test_dua_calon_sama_sama_berbukti_tetap_ditolak(self):
+        """Kalau Elo tidak memisahkan, tebakan tetap dilarang — dan dicatat."""
+        levon = self.tambah_pemain("Aronian, Levon", "aronian levon", "13300474")
+        laurel = self.tambah_pemain("Aronian, Laurel", "aronian laurel", "13300999")
+        mentor = self.tambah_tanpa_fide("Aronian,L", "aronian l")
+        lawan = self.tambah_pemain("Lawan, C", "lawan c", "777")
+        for pid in (levon, laurel, mentor):
+            self.tambah_partai(pid, lawan, 2780, 2600, f"2015.0{(pid % 8) + 1}.01")
+        ragu = []
+        self.assertEqual(cari_pasangan_tanpa_fide(self.conn, ragu), [])
+        self.assertEqual([r["id"] for r, _, _ in ragu], [mentor])
+        self.assertEqual(ragu[0][2], 2)          # dua calon sama-sama berbukti
+
+    def test_dua_baris_otb_tanpa_fide_digabung(self):
+        """
+        Kasus Bent Larsen: keduanya tanpa FIDE ID (sudah wafat, tidak ada di
+        daftar FIDE) dan 100% dari PGN Mentor. 54 partai 'Larsen,B' terdampar
+        terpisah dari 2.268 partai 'Larsen, Bent' sampai 25 Sep 2026.
+        """
+        bent = self.tambah_tanpa_fide("Larsen, Bent", "larsen bent")
+        singkat = self.tambah_tanpa_fide("Larsen,B", "larsen b")
+        lawan = self.tambah_pemain("Lawan, J", "lawan j", "1212")
+        for i in range(3):
+            self.tambah_partai(bent, lawan, 2600, 2500, f"1999.0{i + 1}.01",
+                               sumber="pgnmentor")
+        self.tambah_partai(singkat, lawan, 2610, 2500, "1999.05.01", sumber="pgnmentor")
+        pasangan = cari_pasangan_tanpa_fide(self.conn)
+        self.assertEqual([(s["id"], b["id"]) for s, b, _ in pasangan], [(bent, singkat)])
+        self.assertIn("100% OTB", pasangan[0][2])
+
+    def test_username_online_tidak_pernah_digabung(self):
+        """
+        Batas yang dijaga kolom `sumber`, bukan oleh "tanpa FIDE ID".
+
+        Audit 13 Sep menemukan bukti Elo meloloskan 'Cabe-pedas' +
+        'Cabe-pedas165' — dua username Lichess berbeda. Penjagaannya dulu
+        melarang SEMUA baris tanpa FIDE ID, dan Bent Larsen ikut jadi korban.
+        Sekarang yang dilarang persis yang dimaksud: baris yang punya partai
+        dari akun online.
         """
         a = self.tambah_tanpa_fide("Cabe-pedas", "cabe pedas")
         b = self.tambah_tanpa_fide("Cabe-pedas165", "cabe pedas165")
         lawan = self.tambah_pemain("Lawan, I", "lawan i", "1010")
-        self.tambah_partai(a, lawan, 1800, 1800, "2020.01.01")
-        self.tambah_partai(b, lawan, 1810, 1800, "2020.02.01")
+        self.tambah_partai(a, lawan, 1800, 1800, "2020.01.01", sumber="lichess-user")
+        for i in range(3):
+            self.tambah_partai(b, lawan, 1810, 1800, f"2020.0{i + 2}.01",
+                               sumber="lichess-user")
         self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
 
+    def test_nama_depan_dua_kata_tetap_bertemu_singkatannya(self):
+        """
+        'Short, Nigel D' pernah dikelompokkan bermarga 'short nigel' karena
+        batas nama belakang ditebak dari posisi kata, bukan dari koma. Akibatnya
+        ia tidak pernah bertemu 'Short,N' dan 83 partainya terdampar.
+        """
+        asli = self.tambah_pemain("Short, Nigel D", "short nigel d", "400025")
+        mentor = self.tambah_tanpa_fide("Short,N", "short n")
+        lawan = self.tambah_pemain("Lawan, K", "lawan k", "1313")
+        self.tambah_partai(asli, lawan, 2670, 2500, "2000.03.01")
+        self.tambah_partai(mentor, lawan, 2683, 2500, "2000.06.01")
+        pasangan = cari_pasangan_tanpa_fide(self.conn)
+        self.assertEqual([(s["id"], b["id"]) for s, b, _ in pasangan], [(asli, mentor)])
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_pernah_berhadapan_berarti_dua_orang(self):
+        """Satu partai di antara keduanya sudah cukup membatalkan pencalonan."""
+        asli = self.tambah_pemain("Petrov, Martin", "petrov martin", "2911086")
+        lain = self.tambah_tanpa_fide("Petrov,M", "petrov m")
+        self.tambah_partai(asli, lain, 2500, 2490, "2018.01.01")
+        self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
+
+    def test_tidak_digabung_ke_arah_nama_yang_lebih_singkat(self):
+        """
+        'Larsen,Be' tidak boleh menelan 'Larsen,B' atau sebaliknya tanpa FIDE
+        ID: tanpa penjagaan arah, rantai dua baris bisa saling menghapus.
+        """
+        b = self.tambah_tanpa_fide("Larsen,B", "larsen b")
+        be = self.tambah_tanpa_fide("Larsen,Be", "larsen be")
+        lawan = self.tambah_pemain("Lawan, L", "lawan l", "1414")
+        self.tambah_partai(b, lawan, 2600, 2500, "1999.01.01", sumber="pgnmentor")
+        self.tambah_partai(be, lawan, 2605, 2500, "1999.02.01", sumber="pgnmentor")
+        self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
+
+    def test_dua_singkatan_bernomor_bukan_orang_yang_sama(self):
+        """
+        Angka penanda TWIC berarti "dua orang senama yang BERBEDA", jadi
+        'Biolek,R1' dan 'Biolek,R2' tidak pernah digabung — walau Elo keduanya
+        berdekatan dan keduanya tanpa FIDE ID. Diukur 25 Sep 2026: ada 6
+        pasangan seperti ini di database, semuanya belum tergabung hanya karena
+        belum ada tag Elo yang membuktikan.
+        """
+        r1 = self.tambah_tanpa_fide("Biolek,R1", "biolek r1")
+        r2 = self.tambah_tanpa_fide("Biolek,R2", "biolek r2")
+        lawan = self.tambah_pemain("Lawan, M", "lawan m", "1515")
+        self.tambah_partai(r1, lawan, 2400, 2300, "2012.01.01", sumber="pgnmentor")
+        for i in range(3):
+            self.tambah_partai(r2, lawan, 2410, 2300, f"2012.0{i + 2}.01",
+                               sumber="pgnmentor")
+        self.assertEqual(cari_pasangan_tanpa_fide(self.conn), [])
+
+    def test_bernomor_terhadap_nama_lengkap_tetap_boleh(self):
+        """Penjagaan itu hanya berlaku kalau KEDUA sisi bernomor."""
+        asli = self.tambah_pemain("Biolek, Radim", "biolek radim", "301078")
+        twic = self.tambah_tanpa_fide("Biolek,R1", "biolek r1")
+        lawan = self.tambah_pemain("Lawan, N", "lawan n", "1616")
+        self.tambah_partai(asli, lawan, 2400, 2300, "2012.01.01")
+        self.tambah_partai(twic, lawan, 2410, 2300, "2012.02.01")
+        pasangan = cari_pasangan_tanpa_fide(self.conn)
+        self.assertEqual([(s["id"], b["id"]) for s, b, _ in pasangan], [(asli, twic)])
+
+
+class NamaBentrok(unittest.TestCase):
+    """Menggabung 'Anand,V' ke Vishy membawa partai 'Anand,Vignesh' ikut."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from app.impor import impor_teks
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = koneksi(Path(self.tmp.name) / "uji.db")
+        buat_skema(self.conn)
+        # 'Anand,V' dulu, lalu Vignesh (tanpa bukti lain, ikut ke singkatan),
+        # lalu Vishy ber-FIDE ID sebagai baris sendiri.
+        for i, (putih, fide) in enumerate([("Anand,V", None), ("Anand,Vignesh", None),
+                                           ("Anand, Viswanathan", "5000017")]):
+            tag = ['[Event "u"]', f'[Date "2024.01.0{i + 1}"]', f'[White "{putih}"]',
+                   '[Black "Lawan, Satu"]', '[Result "1-0"]']
+            if fide:
+                tag.append(f'[WhiteFideId "{fide}"]')
+            impor_teks(self.conn, "\n".join(tag) + "\n\n1. e4 e5 2. Nf3 1-0\n", "pgnmentor")
+        self.id = {r["nama"]: r["id"] for r in self.conn.execute("SELECT id, nama FROM pemain")}
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_bentrok_terdeteksi(self):
+        from gabung_pemain import nama_bentrok
+        self.assertNotIn("Anand,Vignesh", self.id)          # ikut ke singkatan, seperti data lama
+        self.assertEqual(nama_bentrok(self.conn, self.id["Anand, Viswanathan"], self.id["Anand,V"]),
+                         ["Anand,Vignesh"])
+
+    def test_tanpa_bentrok_kosong(self):
+        from gabung_pemain import nama_bentrok
+        self.conn.execute("DELETE FROM partai WHERE pgn LIKE '%Vignesh%'")
+        self.assertEqual(nama_bentrok(self.conn, self.id["Anand, Viswanathan"], self.id["Anand,V"]), [])

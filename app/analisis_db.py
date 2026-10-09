@@ -201,10 +201,13 @@ def teks_skor(cp: int | None, mat: int | None) -> str:
     return f"{'+' if cp > 0 else ''}{cp / 100:.2f}".replace(".", ",")
 
 
-def hapus_analisis(conn: sqlite3.Connection, partai_id: int) -> bool:
+def hapus_analisis(conn: sqlite3.Connection, partai_id: int, commit: bool = True) -> bool:
+    """`commit=False` untuk pemanggil yang sedang di dalam transaksi/SAVEPOINT
+    sendiri (impor per partai): commit di sini akan melepas savepoint-nya."""
     cur = conn.execute("DELETE FROM analisis WHERE partai_id = ?", (partai_id,))
     conn.execute("DELETE FROM analisis_langkah WHERE partai_id = ?", (partai_id,))
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.rowcount > 0
 
 
@@ -230,10 +233,171 @@ def mat_dari_sudut_pemain(mat_sesudah: int | None, warna: str) -> int | None:
     return mat_sesudah if warna == "putih" else -mat_sesudah
 
 
+# COUNT(*) analisis_langkah memindai 23 juta entri indeks (0,25 detik hangat,
+# jauh lebih lama saat disk dingin) di tiap /api/statistik dan halaman Mesin,
+# padahal angkanya hanya berubah kalau ada analisis yang disimpan/dihapus.
+# Disimpan per database selama (jumlah, id terbesar) tabel analisis sama.
+_langkah_tersimpan: dict = {}
+
+
 def statistik_analisis(conn: sqlite3.Connection) -> dict:
     satu = lambda sql: conn.execute(sql).fetchone()[0]
+    dianalisis, id_akhir = conn.execute("SELECT COUNT(*), MAX(id) FROM analisis").fetchone()
+    berkas = conn.execute("PRAGMA database_list").fetchone()[2]
+    kunci = (berkas, dianalisis, id_akhir)
+    langkah = _langkah_tersimpan.get(kunci) if berkas else None
+    if langkah is None:
+        langkah = satu("SELECT COUNT(*) FROM analisis_langkah")
+        if berkas:
+            _langkah_tersimpan.clear()
+            _langkah_tersimpan[kunci] = langkah
     return {
-        "partai_dianalisis": satu("SELECT COUNT(*) FROM analisis"),
+        "partai_dianalisis": dianalisis,
         "partai_total": satu("SELECT COUNT(*) FROM partai"),
-        "langkah_dianalisis": satu("SELECT COUNT(*) FROM analisis_langkah"),
+        "langkah_dianalisis": langkah,
     }
+
+
+# ---------------------------------------------------------------------------
+# Hitung ulang klasifikasi & akurasi analisis yang sudah tersimpan
+# ---------------------------------------------------------------------------
+
+ROKADE_LICHESS = ("e1h1", "e1a1", "e8h8", "e8a8")    # raja-makan-benteng
+
+
+def klasifikasi_ulang_satu(conn: sqlite3.Connection, partai_id: int) -> dict | None:
+    """
+    Terapkan aturan klasifikasi & akurasi yang BERLAKU SEKARANG
+    (catur_analysis.partai) ke satu analisis tersimpan, tanpa engine.
+
+    Eval tiap langkah sudah tersimpan, jadi yang dihitung ulang hanya
+    turunannya: klasifikasi, kehilangan langkah terbaik/paksa (= 0), rokade
+    Lichess `e8h8` -> `e8g8`, akurasi, dan jumlah blunder/mistake/inaccuracy.
+    Langkah paksa dikenali dengan memutar ulang PGN. Idempoten: dijalankan dua
+    kali hasilnya sama. Kembalikan ringkasan perubahan, None kalau tak ada
+    analisis atau PGN tak terbaca.
+    """
+    import io                                                   # noqa: PLC0415
+    from types import SimpleNamespace                           # noqa: PLC0415
+    import chess                                                # noqa: PLC0415
+    import chess.pgn                                            # noqa: PLC0415
+    from catur_analysis.partai import (CP_AWAL, akurasi_partai,   # noqa: PLC0415
+                                       klasifikasikan)
+
+    baris_pgn = conn.execute("SELECT pgn FROM partai WHERE id = ?", (partai_id,)).fetchone()
+    rows = conn.execute(
+        "SELECT ply, warna, eval_sebelum_cp, eval_sesudah_cp, eval_putih_cp, kehilangan_cp, "
+        "klasifikasi, langkah_terbaik_uci FROM analisis_langkah WHERE partai_id = ? ORDER BY ply",
+        (partai_id,)).fetchall()
+    if baris_pgn is None or not rows:
+        return None
+    game = chess.pgn.read_game(io.StringIO(baris_pgn[0]))
+    if game is None:
+        return None
+
+    # papan sebelum tiap ply: langkah paksa + ubah rokade Lichess ke UCI standar
+    board = game.board()
+    paksa, rokade = {}, {}
+    per_ply = {r[0]: r for r in rows}
+    for ply, mv in enumerate(game.mainline_moves()):
+        paksa[ply] = board.legal_moves.count() == 1
+        r = per_ply.get(ply)
+        if r is not None and (r[7] or "") in ROKADE_LICHESS:
+            try:
+                gerak = chess.Move.from_uci(r[7])
+                standar = board.parse_san(board.san(gerak)).uci() if gerak in board.legal_moves else r[7]
+                if standar != r[7]:          # e1h1 bisa juga Rh1 biasa: itu dibiarkan
+                    rokade[ply] = standar
+            except ValueError:
+                pass
+        board.push(mv)
+
+    ubah = []
+    baru = []
+    hitung = {w: {"blunder": 0, "mistake": 0, "inaccuracy": 0} for w in ("putih", "hitam")}
+    for ply, warna, sebelum, sesudah, putih_cp, hilang, klas, terbaik_uci in rows:
+        if klas == "buku":
+            klas_baru, hilang_baru = klas, hilang
+        else:
+            terbaik = klas == "terbaik" or paksa.get(ply, False)
+            klas_baru = klasifikasikan(sebelum, sesudah, terbaik)
+            hilang_baru = 0 if terbaik else hilang
+            if klas_baru in hitung[warna]:
+                hitung[warna][klas_baru] += 1
+        uci_baru = rokade.get(ply, terbaik_uci)
+        if (klas_baru, hilang_baru, uci_baru) != (klas, hilang, terbaik_uci):
+            ubah.append((klas_baru, hilang_baru, uci_baru, partai_id, ply))
+        baru.append(SimpleNamespace(warna=warna, eval_putih_cp=putih_cp, klasifikasi=klas_baru))
+
+    pertama = rows[0]
+    awal = CP_AWAL if game.board().fen() == chess.STARTING_FEN else (
+        pertama[2] if pertama[1] == "putih" else -pertama[2])
+    akurasi = akurasi_partai(baru, awal)
+    if ubah:
+        conn.executemany(
+            "UPDATE analisis_langkah SET klasifikasi = ?, kehilangan_cp = ?, langkah_terbaik_uci = ? "
+            "WHERE partai_id = ? AND ply = ?", ubah)
+    conn.execute(
+        "UPDATE analisis SET akurasi_putih = ?, akurasi_hitam = ?, "
+        "blunder_putih = ?, mistake_putih = ?, inaccuracy_putih = ?, "
+        "blunder_hitam = ?, mistake_hitam = ?, inaccuracy_hitam = ? WHERE partai_id = ?",
+        (akurasi["putih"], akurasi["hitam"],
+         hitung["putih"]["blunder"], hitung["putih"]["mistake"], hitung["putih"]["inaccuracy"],
+         hitung["hitam"]["blunder"], hitung["hitam"]["mistake"], hitung["hitam"]["inaccuracy"],
+         partai_id))
+    return {"langkah_berubah": len(ubah), "rokade": len(rokade)}
+
+
+def klasifikasi_ulang(conn: sqlite3.Connection, per_commit: int = 500,
+                      lapor=print, batas: int | None = None) -> dict:
+    """klasifikasi_ulang_satu() untuk semua analisis, commit per `per_commit` partai."""
+    ids = [r[0] for r in conn.execute("SELECT partai_id FROM analisis ORDER BY partai_id")]
+    if batas:
+        ids = ids[:batas]
+    total = {"partai": 0, "langkah_berubah": 0, "rokade": 0, "dilewati": 0}
+    mulai = time.time()
+    for i, pid in enumerate(ids, start=1):
+        h = klasifikasi_ulang_satu(conn, pid)
+        if h is None:
+            total["dilewati"] += 1
+        else:
+            total["partai"] += 1
+            total["langkah_berubah"] += h["langkah_berubah"]
+            total["rokade"] += h["rokade"]
+        if i % per_commit == 0 or i == len(ids):
+            conn.commit()
+            if lapor:
+                sisa = (time.time() - mulai) / i * (len(ids) - i) / 60
+                lapor(f"  {i}/{len(ids)} partai, {total['langkah_berubah']} langkah berubah, "
+                      f"sisa ~{sisa:.0f} menit")
+    return total
+
+
+if __name__ == "__main__":
+    import argparse                                             # noqa: PLC0415
+    import sys                                                  # noqa: PLC0415
+    from pathlib import Path                                    # noqa: PLC0415
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from .db import koneksi                                     # noqa: PLC0415
+    from .kunci_penulis import KunciPenulis, KunciTerpakai      # noqa: PLC0415
+
+    p = argparse.ArgumentParser(description="Hitung ulang klasifikasi & akurasi analisis "
+                                            "tersimpan dengan aturan sekarang (tanpa engine).")
+    p.add_argument("--klasifikasi-ulang", action="store_true", required=True)
+    p.add_argument("--batas", type=int, help="hanya N analisis pertama (uji coba)")
+    p.add_argument("--db")
+    a = p.parse_args()
+    try:
+        kunci = KunciPenulis("hitung ulang klasifikasi analisis").ambil()
+    except KunciTerpakai as e:
+        print(e)
+        raise SystemExit(1)
+    try:
+        conn = koneksi(a.db) if a.db else koneksi()
+        conn.execute("PRAGMA busy_timeout = 120000")
+        print(klasifikasi_ulang(conn, batas=a.batas, lapor=lambda s: print(s, flush=True)))
+        conn.close()
+    finally:
+        kunci.lepas()
+

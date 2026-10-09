@@ -19,6 +19,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,12 +32,47 @@ from .db import PATH_DB, buat_skema, koneksi
 AKAR = Path(__file__).resolve().parents[1]
 FOLDER_WEB = AKAR / "web"
 
+
+@asynccontextmanager
+async def daur_hidup(app: FastAPI):
+    """
+    Pastikan database dan tabelnya ada sebelum melayani permintaan.
+
+    Dulu `@aplikasi.on_event("startup")`; FastAPI menandainya usang dan tiap
+    kali tes dijalankan muncul DeprecationWarning. Peringatan yang selalu ada
+    membuat peringatan baru tidak terlihat, jadi diganti ke lifespan.
+    """
+    conn = koneksi()
+    try:
+        buat_skema(conn)
+    finally:
+        conn.close()
+    # Server dari pintasan berjalan tanpa jendela, dan Windows 11 lalu
+    # memperlambatnya sampai 4x (lihat app/proses.py jangan_diperlambat).
+    from .proses import jangan_diperlambat
+    jangan_diperlambat()
+    yield
+
+
 aplikasi = FastAPI(
     title="Chess GM Database",
     description="Database partai catur untuk belajar. Phase 1: daftar, cari, "
                 "buka, dan mainkan ulang partai.",
     version="0.1.0",
+    lifespan=daur_hidup,
 )
+
+
+@aplikasi.exception_handler(OverflowError)
+async def angka_terlalu_besar(request, galat):
+    """
+    Angka di luar INTEGER 64-bit SQLite (mis. /api/partai/99999999999999999999)
+    dulu lolos jadi 500 di tiap endpoint yang menerima id (audit 27 Sep 2026).
+    Satu penangan di sini melindungi semua endpoint sekaligus, termasuk
+    parameter query; tidak ada partai atau pemain dengan id sebesar itu.
+    """
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": "Angka terlalu besar."}, status_code=422)
 
 
 def db():
@@ -49,16 +86,6 @@ def db():
     conn = koneksi()
     try:
         yield conn
-    finally:
-        conn.close()
-
-
-@aplikasi.on_event("startup")
-def saat_mulai() -> None:
-    """Pastikan database dan tabelnya ada sebelum melayani permintaan."""
-    conn = koneksi()
-    try:
-        buat_skema(conn)
     finally:
         conn.close()
 
@@ -168,7 +195,9 @@ def api_profil_pemain(pemain_id: int, conn: sqlite3.Connection = Depends(db)):
 def api_pembukaan_pemain(pemain_id: int, minimal: int = Query(1, ge=1),
                          conn: sqlite3.Connection = Depends(db)):
     from .pemain_stat import pembukaan_pemain
-    if conn.execute("SELECT 1 FROM pemain WHERE id = ?", (pemain_id,)).fetchone() is None:
+    # Pemeriksaan "pemainnya ada" memakai repositori, bukan SQL di berkas ini:
+    # app/main.py sengaja bebas SQL (CLAUDE.md bagian 4, dijaga tests/test_arsitektur.py).
+    if not repositori.pemain_ada(conn, pemain_id):
         raise HTTPException(status_code=404, detail=f"Pemain {pemain_id} tidak ada")
     return pembukaan_pemain(conn, pemain_id, minimal=minimal)
 
@@ -222,9 +251,11 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 class PosisiBaru(BaseModel):
     fen: str = Field(..., min_length=10, max_length=120)
-    judul: str = ""
-    catatan: str = ""
-    asal: str = ""
+    # Batas sama dengan posisi_tersimpan.PANJANG_*_MAKS. Dulu tanpa batas:
+    # judul 5 MB diterima lalu dipotong diam-diam (audit 28 Sep 2026).
+    judul: str = Field("", max_length=200)
+    catatan: str = Field("", max_length=2000)
+    asal: str = Field("", max_length=40)
     partai_id: int | None = None
 
 
@@ -294,6 +325,21 @@ from .latihan_catatan import router as router_latihan_catatan   # noqa: E402
 
 aplikasi.include_router(router_latihan_catatan)
 
+# Rencana latihan minggu ini (A40): membaca ringkasan + catatan latihan.
+from .rencana import router as router_rencana   # noqa: E402
+
+aplikasi.include_router(router_rencana)
+
+# Unduh repertoire yang dimainkan sebagai berkas PGN (A41).
+from .repertoire_pgn import router as router_repertoire_pgn   # noqa: E402
+
+aplikasi.include_router(router_repertoire_pgn)
+
+# Tanya database/aplikasi pakai bahasa Indonesia lewat Ollama (Phase 6).
+from .tanya_web import router as router_tanya   # noqa: E402
+
+aplikasi.include_router(router_tanya)
+
 # Pembantu analisis: tablet/HP di WiFi rumah menghitung dengan Stockfish browser.
 from .pembantu import HEADER_PROXY, boleh_dari_luar, router as router_pembantu   # noqa: E402
 
@@ -325,6 +371,24 @@ async def jangan_simpan_cache_statis(request, panggil_berikutnya):
 
 
 @aplikasi.middleware("http")
+async def hanya_dari_halaman_sendiri(request, panggil_berikutnya):
+    """
+    Tolak permintaan yang Host-nya bukan laptop ini, atau yang mengubah
+    sesuatu atas suruhan situs lain (audit 27 Sep 2026). Alasannya dan
+    batasnya di app/penjaga_asal.py.
+    """
+    from .penjaga_asal import asal_diizinkan, nama_laptop_terkini
+    from .pembantu import _jalur_pembantu
+    alasan = asal_diizinkan(request.method, request.headers.get("host"),
+                            request.headers.get("origin"),
+                            _jalur_pembantu(request.url.path), nama_laptop_terkini())
+    if alasan:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": f"Ditolak: {alasan}."}, status_code=403)
+    return await panggil_berikutnya(request)
+
+
+@aplikasi.middleware("http")
 async def hanya_pembantu_dari_luar(request, panggil_berikutnya):
     """
     Perangkat lain di WiFi hanya boleh membuka halaman pembantu dan API-nya.
@@ -345,49 +409,52 @@ async def hanya_pembantu_dari_luar(request, panggil_berikutnya):
     return await panggil_berikutnya(request)
 
 
+def halaman(nama: str) -> FileResponse:
+    """
+    Sajikan satu berkas HTML dari web/, atau 404 yang menyebut berkasnya.
+
+    Keenam rute halaman di bawah dulunya enam fungsi yang isinya sama persis
+    kecuali nama berkas. Sekarang satu helper, jadi menambah halaman baru
+    cukup satu baris dan pesan 404-nya tidak pernah berbeda-beda.
+    """
+    berkas = FOLDER_WEB / nama
+    if not berkas.is_file():
+        raise HTTPException(status_code=404, detail=f"web/{nama} belum dibuat")
+    return FileResponse(berkas)
+
+
+# Alamat rapi -> berkas di web/. Bagian {..} pada alamat dibaca JavaScript
+# halamannya sendiri, jadi berkas yang disajikan sama untuk semua nomor.
 @aplikasi.get("/", include_in_schema=False)
 def halaman_daftar():
-    berkas = FOLDER_WEB / "index.html"
-    if not berkas.is_file():
-        raise HTTPException(status_code=404, detail="web/index.html belum dibuat")
-    return FileResponse(berkas)
+    return halaman("index.html")
 
 
 @aplikasi.get("/analisis", include_in_schema=False)
 def halaman_analisis():
-    berkas = FOLDER_WEB / "analisis.html"
-    if not berkas.is_file():
-        raise HTTPException(status_code=404, detail="web/analisis.html belum dibuat")
-    return FileResponse(berkas)
+    return halaman("analisis.html")
 
 
 @aplikasi.get("/jelajah", include_in_schema=False)
 def halaman_jelajah():
-    berkas = FOLDER_WEB / "jelajah.html"
-    if not berkas.is_file():
-        raise HTTPException(status_code=404, detail="web/jelajah.html belum dibuat")
-    return FileResponse(berkas)
+    return halaman("jelajah.html")
 
 
 @aplikasi.get("/pemain/{pemain_id}", include_in_schema=False)
 def halaman_pemain(pemain_id: int):
-    berkas = FOLDER_WEB / "pemain.html"
-    if not berkas.is_file():
-        raise HTTPException(status_code=404, detail="web/pemain.html belum dibuat")
-    return FileResponse(berkas)
+    return halaman("pemain.html")
 
 
 @aplikasi.get("/ringkasan", include_in_schema=False)
 def halaman_ringkasan():
-    berkas = FOLDER_WEB / "ringkasan.html"
-    if not berkas.is_file():
-        raise HTTPException(status_code=404, detail="web/ringkasan.html belum dibuat")
-    return FileResponse(berkas)
+    return halaman("ringkasan.html")
+
+@aplikasi.get("/tanya", include_in_schema=False)
+def halaman_tanya():
+    return halaman("tanya.html")
+
 
 
 @aplikasi.get("/partai/{partai_id}", include_in_schema=False)
 def halaman_partai(partai_id: int):
-    berkas = FOLDER_WEB / "partai.html"
-    if not berkas.is_file():
-        raise HTTPException(status_code=404, detail="web/partai.html belum dibuat")
-    return FileResponse(berkas)
+    return halaman("partai.html")

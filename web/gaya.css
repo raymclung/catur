@@ -651,3 +651,18 @@ details[open] > .riwayat-judul::before { content: "▾ "; }
 /* Pembantu tablet/HP di halaman Mesin */
 .pembantu-alamat { font-family: ui-monospace, Consolas, monospace; font-size: 1.05rem; font-weight: 600; margin: 2px 0 8px; overflow-wrap: anywhere; }
 .pembantu-kode { font-family: ui-monospace, Consolas, monospace; font-size: 1.3rem; letter-spacing: .15em; }
+
+/* Tebak langkah GM (tebak.html) */
+.tebak-judul { font-weight: 700; font-size: 16px; }
+.tebak-judul.tebak-sama, .tebak-judul.tebak-bagus { color: var(--putih-menang); }
+.tebak-judul.tebak-kurang { color: var(--remis); }
+.tebak-judul.tebak-meleset { color: #b3261e; }
+.tebak-judul.tebak-takDinilai, .tebak-judul.tebak-dilihat { color: var(--teks-redup); }
+.tebak-riwayat { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.tebak-riwayat > * + * { margin-top: 0; }
+.tebak-item { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tebak-item > .redup:first-child { margin-right: 2px; }
+.tebak-item.tebak-sama { color: var(--putih-menang); font-weight: 600; }
+.tebak-item.tebak-kurang { color: var(--remis); }
+.tebak-item.tebak-meleset { color: #b3261e; }
+.tebak-rangkum { margin-top: 8px; font-weight: 600; }

@@ -345,7 +345,10 @@ def main() -> int:
         if n == 0:
             print(f"    tidak ada partai yang cocok dengan filter ini")
         else:
-            nama_file.write_text(teks, encoding="utf-8")
+            # newline="": tulis apa adanya. Tanpa itu Windows mengubah akhir baris LF
+            # jadi CRLF, padahal .gitattributes menjanjikan data/pgn byte-per-byte
+            # sama dengan unduhannya (audit 28 Sep 2026: disk CRLF, git LF).
+            nama_file.write_text(teks, encoding="utf-8", newline="")
             print(f"    {n} partai -> {nama_file.relative_to(AKAR)}")
         total += n
         print()

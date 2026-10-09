@@ -25,10 +25,12 @@
     <span class="pemisah" aria-hidden="true"></span>
     <a href="/ringkasan">Ringkasan</a>
     <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/tebak.html" title="Main sebagai GM di partai aslinya dan tebak langkahnya">Tebak GM</a>
     <a href="/static/kekalahan.html">Kekalahan</a>
     <a href="/static/kelemahan.html">Kelemahan</a>
     <a href="/static/repertoire.html">Repertoire</a>
     <a href="/static/kemajuan.html">Kemajuan</a>
+    <a href="/tanya" title="Tanya database pakai bahasa Indonesia">Tanya</a>
   </div></nav>
 </header>
 
@@ -60,7 +62,9 @@
 
       <div class="mesin-isi">
         <div class="segmen" role="radiogroup" aria-label="Partai yang dianalisis">
-          <input type="radio" name="kelompok" id="kel-saya" value="saya" checked>
+          <input type="radio" name="kelompok" id="kel-belum" value="belum" checked>
+          <label for="kel-belum" title="Semua partai yang belum pernah dianalisis engine, yang terbaru dulu — tanpa saringan apa pun">Belum dianalisis</label>
+          <input type="radio" name="kelompok" id="kel-saya" value="saya">
           <label for="kel-saya" title="Partai Ray sendiri dari Lichess dan Chess.com">Partai saya</label>
           <input type="radio" name="kelompok" id="kel-gm" value="gm">
           <label for="kel-gm" title="Partai GM dari TWIC, PGN Mentor, dan broadcast">Partai GM</label>
@@ -68,13 +72,18 @@
           <label for="kel-id" title="Nomor partai tertentu">Nomor partai</label>
         </div>
 
-        <div class="baris-isi" id="bagian-saya">
+        <div class="baris-isi" id="bagian-belum">
+          <span class="kecil redup" id="ringkas-belum">Semua partai yang belum dianalisis, yang terbaru dulu. Tanpa saringan.</span>
+        </div>
+
+        <div class="baris-isi" id="bagian-saya" hidden>
           <label>Hasil
-            <select id="hasil">
-              <option value="kalah" selected>kalah</option>
-              <option value="menang">menang</option>
-              <option value="remis">remis</option>
-              <option value="">semua</option>
+            <select id="hasil" title="Ray, 21 Sep 2026: bawaannya menang + kalah; remis paling sedikit mengajari">
+              <option value="menang-kalah" selected>menang + kalah</option>
+              <option value="kalah">kalah saja</option>
+              <option value="menang">menang saja</option>
+              <option value="remis">remis saja</option>
+              <option value="">semua, termasuk remis</option>
             </select>
           </label>
           <label>Format
@@ -127,7 +136,8 @@
 
         <div class="baris-isi baris-pisah">
           <label>Jumlah partai
-            <input type="text" id="terbaru" value="25" size="5" inputmode="numeric">
+            <input type="text" id="terbaru" value="2000" size="5" inputmode="numeric"
+                   title="Batas atas 2.000 partai per batch. Bawaannya 2.000 supaya sekali jalan mengerjakan banyak (permintaan Ray 21 Sep 2026); turunkan kalau mau mencoba sedikit dulu.">
           </label>
           <label>Profil engine
             <select id="profil">
@@ -146,8 +156,12 @@
           <button type="button" id="lihat">Lihat dulu</button>
           <button type="button" id="mulai" class="utama">Mulai analisa</button>
           <button type="button" id="antrekan" title="Kerjakan nanti, begitu ada slot engine kosong">+ Antrekan</button>
-          <span class="kecil redup" id="catatan-mulai"></span>
+          <span class="kecil redup" id="status-slot"></span>
         </div>
+        <!-- Pesan sesudah Mulai/Hentikan/Lanjutkan punya tempat sendiri:
+             dulu ditulis ke elemen yang sama dengan status slot, yang ditimpa
+             lagi sepersekian detik kemudian oleh muatStatus(). -->
+        <div class="kecil" id="catatan-mulai" style="margin-top:6px"></div>
         <div class="alat" style="margin-top:8px">
           <label class="kecil redup" title="Engine dikurung di sebagian inti CPU; sisanya selalu kosong untuk aplikasi lain">
             Engine boleh memakai paling banyak
@@ -204,6 +218,12 @@
         <span class="kecil redup" id="status-penjaga">memuat…</span>
       </div>
       <div id="daftar-antrean" style="margin-top:10px"></div>
+        <!-- Riwayat dipisah dari antrean dan dilipat: isinya pekerjaan yang
+             sudah lewat, bukan yang akan dikerjakan (Ray, 25 Sep 2026). -->
+        <details id="bungkus-riwayat-antrean" style="margin-top:12px" hidden>
+          <summary class="kecil" id="ringkas-riwayat">Riwayat</summary>
+          <div id="daftar-riwayat" style="margin-top:10px"></div>
+        </details>
     </div>
   </div>
 

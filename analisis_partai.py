@@ -27,8 +27,11 @@ selesai tetap tersimpan, jalankan lagi untuk melanjutkan.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
+import os
 import re
+import shlex
 import sqlite3
 import sys
 import time
@@ -37,18 +40,23 @@ from pathlib import Path
 AKAR = Path(__file__).resolve().parent
 sys.path.insert(0, str(AKAR / "src"))
 
+import chess.engine
 import chess.pgn
 
 from ambil_partai import AKUN
 from app.analisis_db import simpan_laporan, statistik_analisis
-from app.db import PATH_DB, buat_skema, koneksi
+from app.db import FOLDER_DATA, PATH_DB, buat_skema, koneksi
 from app.format_partai import FORMAT_VALID
+from app.repositori import pola_like
 from app.kunci_penulis import tunggu_sampai_bebas
 from app.impor import normalisasi_nama
 from catur_analysis.engine import PROFIL, EngineError, Stockfish
 from catur_analysis.partai import analisis_partai
 
-GELAR_VALID = ("GM", "IM", "FM", "CM", "WGM", "WIM", "WFM", "WCM", "NM")
+# WNM ikut sejak 25 Sep 2026: gelarnya ada di database (dan datang dari
+# Chess.com), tapi dulu tidak bisa dipilih di --gelar-lawan maupun halaman
+# Mesin, jadi partai lawan ber-WNM tidak pernah bisa disaring.
+GELAR_VALID = ("GM", "IM", "FM", "CM", "WGM", "WIM", "WFM", "WCM", "NM", "WNM")
 
 # Detik per ply untuk estimasi waktu, dipakai hanya kalau belum ada riwayat.
 #
@@ -64,18 +72,69 @@ GELAR_VALID = ("GM", "IM", "FM", "CM", "WGM", "WIM", "WFM", "WCM", "NM")
 # cepat: diukur 2,7 detik untuk partai ±80 ply = ±0,034 detik/ply; dibulatkan ke atas.
 DETIK_PER_PLY_CADANGAN = {"cepat": 0.05, "hemat": 1.0, "normal": 4.0, "dalam": 15.0}
 
+# Engine yang mogok sekali dinyalakan ulang dan batch lanjut; mogok beruntun
+# sebanyak ini berarti masalahnya di engine (berkas rusak, RAM habis), bukan
+# di partainya, jadi batch berhenti daripada berputar tanpa hasil.
+MAKS_MOGOK_BERUNTUN = 3
+
+# Profil yang dianggap "masih kasar" oleh --dangkal: depth 10, dan evaluasi
+# siaran Lichess yang tidak menyimpan langkah terbaik sama sekali.
+PROFIL_DANGKAL = ("cepat", "lichess")
+
+
+RIWAYAT_PERKIRAAN = 500     # analisis terbaru yang dipakai untuk perkiraan awal
+
 
 def detik_per_ply_terukur(conn, profil: str) -> float | None:
-    """Rata-rata detik per ply dari analisis sebelumnya dengan profil yang sama."""
+    """
+    Detik per ply dari analisis TERBARU dengan profil yang sama.
+
+    Dulu seluruh riwayat: profil cepat terbaca 0,025 dtk/ply, sebagian besar
+    dari 13-22 Sep saat satu batch jalan sendirian, padahal dengan dua batch
+    dan batas CPU 25% yang terukur 0,06-0,07. Perkiraan "68 menit" untuk
+    batch yang nyatanya ±200 menit (audit 27 Sep 2026).
+    """
     r = conn.execute(
         """
-        SELECT SUM(a.durasi_detik) / SUM(g.jumlah_langkah * 2.0)
-        FROM analisis a JOIN partai g ON g.id = a.partai_id
-        WHERE a.profil = ? AND a.durasi_detik IS NOT NULL
+        SELECT SUM(durasi_detik) / SUM(jumlah_langkah * 2.0) FROM (
+            SELECT a.durasi_detik, g.jumlah_langkah
+            FROM analisis a JOIN partai g ON g.id = a.partai_id
+            WHERE a.profil = ? AND a.durasi_detik IS NOT NULL
+            ORDER BY a.id DESC LIMIT ?
+        )
         """,
-        (profil,),
+        (profil, RIWAYAT_PERKIRAAN),
     ).fetchone()[0]
     return float(r) if r else None
+
+
+class PerkiraanSisa:
+    """
+    Sisa waktu batch dari partai yang BENAR-BENAR dianalisis baru-baru ini.
+
+    Dulu (waktu sejak mulai / partai ke-i) x sisa partai: partai yang dilewati
+    ikut dihitung, start engine ikut, dan satu kali macet 4 menit melipatkan
+    perkiraan berlipat-lipat untuk ratusan partai (log 27 Sep: 69 -> 416 m).
+    """
+
+    def __init__(self, daftar: list[dict], jendela: int = 30):
+        from collections import deque
+        self.ply_sisa_setelah = []
+        total = sum(p["jumlah_langkah"] * 2 for p in daftar)
+        for p in daftar:
+            total -= p["jumlah_langkah"] * 2
+            self.ply_sisa_setelah.append(total)
+        self.terakhir = deque(maxlen=jendela)
+
+    def catat(self, durasi: float, jumlah_langkah: int) -> None:
+        self.terakhir.append((durasi, jumlah_langkah * 2))
+
+    def menit(self, i: int) -> float | None:
+        """Sisa menit setelah partai ke-i (1-based); None kalau belum ada data."""
+        ply = sum(p for _, p in self.terakhir)
+        if not ply:
+            return None
+        return sum(d for d, _ in self.terakhir) / ply * self.ply_sisa_setelah[i - 1] / 60
 
 
 def nama_normal_saya(conn=None) -> list[str]:
@@ -153,8 +212,8 @@ def pilih_partai(conn, args) -> list[dict]:
     if getattr(args, "pemain", None):
         bagian = []
         for nama in args.pemain:
-            pola = "%" + normalisasi_nama(nama) + "%"
-            bagian.append("(pw.nama_normal LIKE ? OR pb.nama_normal LIKE ?)")
+            pola = pola_like(normalisasi_nama(nama))
+            bagian.append("(pw.nama_normal LIKE ? ESCAPE '\\' OR pb.nama_normal LIKE ? ESCAPE '\\')")
             params += [pola, pola]
         syarat.append("(" + " OR ".join(bagian) + ")")
 
@@ -178,6 +237,13 @@ def pilih_partai(conn, args) -> list[dict]:
             syarat.append(f"((pw.nama_normal IN ({tanda_saya}) AND g.hasil = '1-0') OR "
                           f" (pb.nama_normal IN ({tanda_saya}) AND g.hasil = '0-1'))")
             params += saya + saya
+        elif args.hasil == "menang-kalah":
+            # Ray, 21 Sep 2026: "maksud semua adalah partai yang menang dan
+            # kalah" — remis dibuang karena partai remis paling sedikit
+            # mengajari, tapi partai menang TIDAK ikut dibuang seperti dulu.
+            syarat.append(f"((pw.nama_normal IN ({tanda_saya}) OR "
+                          f"  pb.nama_normal IN ({tanda_saya})) AND g.hasil IN ('1-0', '0-1'))")
+            params += saya + saya
         else:   # remis
             syarat.append(f"((pw.nama_normal IN ({tanda_saya}) OR "
                           f"  pb.nama_normal IN ({tanda_saya})) AND g.hasil = '1/2-1/2')")
@@ -199,14 +265,42 @@ def pilih_partai(conn, args) -> list[dict]:
         )
         params += saya + [args.lawan_min_elo] + saya + [args.lawan_min_elo]
 
-    if not args.ulang:
+    # --dangkal: kebalikan dari bawaan — justru HANYA partai yang sudah
+    # dianalisis, tapi dengan profil kasar (depth 10 `cepat`, atau evaluasi
+    # siaran `lichess` yang tidak punya langkah terbaik). Dipakai untuk tahap
+    # "analisis mendalam" partai sendiri tanpa mengulang yang sudah depth 16 —
+    # tanpa ini, --ulang ikut mengerjakan 635 partai blitz/rapid yang sudah
+    # dalam, sekitar 7 jam engine terbuang (diukur 18 Sep 2026).
+    if getattr(args, "dangkal", False):
+        syarat.append(f"a.profil IN ({','.join('?' * len(PROFIL_DANGKAL))})")
+        params += list(PROFIL_DANGKAL)
+    elif not args.ulang:
         syarat.append("a.partai_id IS NULL")
+
+    # Partai yang belum selesai ('*') tidak dianalisis, kecuali Ray menyebut
+    # id-nya sendiri. Dua alasan, dan keduanya berdiri sendiri:
+    #   * waktunya terbuang — partai broadcast yang tertangkap saat siaran
+    #     masih berjalan akan masuk lagi dengan hasil lengkap, dan dedup
+    #     (app/impor.py) membuang yang '*', sehingga analisisnya ikut
+    #     terhapus lewat ON DELETE CASCADE;
+    #   * laporannya menyesatkan — 'sebab kalah' tidak berarti apa-apa pada
+    #     partai yang belum punya hasil.
+    # Diukur 25 Sep 2026: 16 partai '*' tersisa, 13 di antaranya sudah
+    # terlanjur dianalisis.
+    if not args.id:
+        syarat.append("g.hasil <> '*'")
 
     syarat.append("g.jumlah_langkah >= ?")
     params.append(args.min_langkah)
 
     where = "WHERE " + " AND ".join(syarat) if syarat else ""
     limit = f"LIMIT {int(args.terbaru)}" if args.terbaru else ""
+    # --terlama: mulai dari ujung yang lain. Dua batch dengan saringan sama,
+    # satu dari yang terbaru dan satu dari yang terlama, tidak memilih partai
+    # yang sama selama sisanya lebih dari dua kali --terbaru; kalau keduanya
+    # akhirnya bertemu, partai yang sudah dianalisis batch lain dilewati di
+    # jalankan(). Ray, 27 Sep 2026: "saya ingin membantu lebih cepat".
+    urut = "ASC" if getattr(args, "terlama", False) else "DESC"
 
     baris = conn.execute(
         f"""
@@ -219,12 +313,17 @@ def pilih_partai(conn, args) -> list[dict]:
         JOIN pemain pb ON pb.id = g.hitam_id
         LEFT JOIN analisis a ON a.partai_id = g.id
         {where}
-        ORDER BY g.tanggal DESC, g.id DESC
+        ORDER BY g.tanggal {urut}, g.id {urut}
         {limit}
         """,
         params,
     ).fetchall()
     return [dict(b) for b in baris]
+
+
+def _persen(akurasi: float | None) -> str:
+    """Akurasi untuk log; None = pihak itu belum melangkah."""
+    return "   - " if akurasi is None else f"{akurasi:5.1f}%"
 
 
 def label(p: dict) -> str:
@@ -239,7 +338,73 @@ def label(p: dict) -> str:
 # saja, jadi satu-satunya jalan adalah proses ini melaporkan diri.
 # Berkasnya dihapus saat batch selesai; kalau proses mati mendadak, berkas
 # yatim dibersihkan oleh pembacanya karena PID-nya sudah tidak hidup.
-FOLDER_KEMAJUAN = Path(__file__).resolve().parent / "data" / "laporan"
+FOLDER_KEMAJUAN = FOLDER_DATA / "laporan"
+
+# Klaim "partai ini sedang saya analisis", satu berkas per partai. Dua batch
+# searah dulu berjalan beriringan dan sama-sama menganalisis partai yang sama:
+# cek "sudah dianalisis" hanya menolong kalau yang lain SUDAH selesai (27 Sep
+# 2026: 66 dari 67 partai batch 6804 juga dikerjakan 22436). Berkas dibuat
+# dengan mode "x" (eksklusif, dijamin sistem operasi), jadi juga berlaku untuk
+# batch yang dijalankan dari terminal. Isinya PID + waktu lahir proses, supaya
+# klaim batch yang sudah mati bisa diambil alih walau PID-nya dipakai ulang.
+FOLDER_KLAIM = FOLDER_DATA / "klaim-analisis"
+
+
+def _identitas_proses(pid: int) -> str:
+    from app.proses import waktu_lahir_proses              # noqa: PLC0415
+    lahir = waktu_lahir_proses(pid)
+    return f"{pid} {lahir:.0f}" if lahir is not None else str(pid)
+
+
+def _pemilik_hidup(isi: str) -> bool:
+    from app.proses import _proses_ada, waktu_lahir_proses  # noqa: PLC0415
+    bagian = isi.split()
+    if not bagian or not bagian[0].isdigit():
+        return False
+    pid = int(bagian[0])
+    if not _proses_ada(pid):
+        return False
+    if len(bagian) < 2:
+        return True
+    lahir = waktu_lahir_proses(pid)
+    return lahir is None or abs(lahir - float(bagian[1])) < 2
+
+
+def klaim_partai(partai_id: int) -> bool:
+    """True kalau partai ini boleh dianalisis proses ini (klaim didapat)."""
+    FOLDER_KLAIM.mkdir(parents=True, exist_ok=True)
+    path = FOLDER_KLAIM / str(partai_id)
+    saya = _identitas_proses(os.getpid())
+    for _ in range(3):
+        try:
+            with path.open("x", encoding="utf-8") as f:
+                f.write(saya)
+            return True
+        except FileExistsError:
+            try:
+                isi = path.read_text(encoding="utf-8")
+            except OSError:
+                continue                     # sedang ditulis/dihapus proses lain
+            if isi.split()[:1] == [str(os.getpid())]:
+                return True
+            if _pemilik_hidup(isi):
+                return False
+            try:
+                path.unlink()                # klaim batch yang sudah mati
+            except OSError:
+                pass
+    return False
+
+
+def lepas_klaim(partai_id: int | None) -> None:
+    if partai_id is None:
+        return
+    path = FOLDER_KLAIM / str(partai_id)
+    try:
+        if path.read_text(encoding="utf-8").split()[:1] == [str(os.getpid())]:
+            path.unlink()
+    except OSError:
+        pass
 
 
 def _path_kemajuan(pid: int | None = None) -> Path:
@@ -293,7 +458,8 @@ def _rentang_eco(nilai: list[str], p) -> list[tuple[str, str]]:
     return hasil
 
 
-def main() -> int:
+def buat_parser() -> argparse.ArgumentParser:
+    """Argumen CLI; dipakai juga untuk membaca ulang perintah batch yang sedang jalan."""
     p = argparse.ArgumentParser(description="Analisis partai di database dengan Stockfish")
     pilih = p.add_argument_group("pemilihan partai (minimal satu)")
     pilih.add_argument("--id", nargs="*", type=int, help="id partai tertentu")
@@ -320,14 +486,21 @@ def main() -> int:
     pilih.add_argument("--repertoire", action="store_true",
                        help="pembukaan repertoire Ray sekaligus: English, Catalan, "
                             "Ragozin, Sicilian")
-    pilih.add_argument("--hasil", choices=["kalah", "menang", "remis"],
-                       help="hasil dari sisi Ray (mis. --hasil kalah untuk halaman Kekalahan)")
+    pilih.add_argument("--hasil", choices=["kalah", "menang", "remis", "menang-kalah"],
+                       help="hasil dari sisi Ray (mis. --hasil kalah untuk halaman Kekalahan; "
+                            "menang-kalah = semua partai berhasil tegas, tanpa remis)")
     pilih.add_argument("--format", choices=list(FORMAT_VALID), dest="format_",
                        help="bullet / blitz / rapid / klasik / tanpa (kolom partai.format)")
     pilih.add_argument("--terbaru", type=int, metavar="N", help="batasi N partai terbaru")
+    pilih.add_argument("--terlama", action="store_true",
+                       help="kerjakan dari partai terlama dulu (--terbaru N jadi N partai terlama)")
     pilih.add_argument("--min-langkah", type=int, default=10,
                        help="lewati partai lebih pendek dari ini (default 10)")
     pilih.add_argument("--ulang", action="store_true", help="analisis ulang yang sudah ada")
+    pilih.add_argument("--dangkal", action="store_true",
+                       help="hanya partai yang analisisnya masih kasar "
+                            f"(profil {'/'.join(PROFIL_DANGKAL)}) — untuk memperdalam "
+                            "tanpa mengulang yang sudah depth 16")
     pilih.add_argument("--bagian", metavar="K/N",
                        help="hanya partai dengan id %% N == K (mis. 0/4), supaya beberapa batch "
                             "sejenis tidak memilih partai yang sama")
@@ -340,9 +513,41 @@ def main() -> int:
                    help="jangan menunggu impor/indeks selesai (bawaan: menunggu, karena "
                         "batch yang mulai di tengah impor bisa mati terkunci)")
     p.add_argument("--db", type=Path, default=PATH_DB)
+    return p
+
+
+def argumen_dari_perintah(perintah: str) -> argparse.Namespace | None:
+    """
+    Saringan batch yang sedang jalan, dibaca ulang dari baris perintahnya.
+
+    Halaman Mesin memakainya untuk tahu partai mana yang sedang dikerjakan
+    batch lain. Membandingkan teks perintah saja tidak cukup: 27 Sep 2026
+    `--sumber gm --terbaru 2000` lolos di samping `--terbaru 2000` karena
+    tulisannya beda, padahal keduanya memilih partai yang sama persis.
+    None kalau perintahnya tidak bisa dibaca.
+    """
+    kata = [k.strip('"') for k in shlex.split(perintah, posix=False)]
+    awal = next((i for i, k in enumerate(kata) if k.replace("\\", "/").endswith("analisis_partai.py")),
+                None)
+    if awal is None:
+        return None
+    p = buat_parser()
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            args = p.parse_args(kata[awal + 1:])
+            args.rentang_eco = _rentang_eco(args.eco, p) if args.eco else []
+    except SystemExit:
+        return None
+    return args
+
+
+def main() -> int:
+    p = buat_parser()
     args = p.parse_args()
 
     args.rentang_eco = _rentang_eco(args.eco, p) if args.eco else []
+    if args.dangkal and args.profil in PROFIL_DANGKAL:
+        p.error("--dangkal dengan profil yang juga dianggap kasar tidak memperdalam apa pun: hasilnya tetap kasar dan partai yang sama terpilih lagi selamanya. Pakai --profil hemat atau lebih teliti.")
     if args.bagian:
         try:
             k, n = (int(x) for x in args.bagian.split("/"))
@@ -406,20 +611,38 @@ def main() -> int:
     jam_mulai = time.strftime("%Y-%m-%d %H:%M")
     tulis_kemajuan(0, len(daftar), None, perintah_ini, jam_mulai)
 
+    mogok_beruntun = 0
+    perkiraan_sisa = PerkiraanSisa(daftar)
+    klaim_aktif = None
     try:
         with Stockfish(profil=profil) as sf:
             nama_engine = sf.nama_engine
             print(f"engine: {nama_engine}\n")
 
             for i, p_ in enumerate(daftar, start=1):
+                lepas_klaim(klaim_aktif)
+                klaim_aktif = None
+                if not klaim_partai(p_["id"]):
+                    print(f"  [{i}/{len(daftar)}] {label(p_)}  sedang dianalisis batch lain, dilewati")
+                    continue
+                klaim_aktif = p_["id"]
                 # Daftar dipilih sekali di awal, padahal batch bisa berjalan
                 # berjam-jam sementara pembantu tablet/HP (app/pembantu.py) atau
                 # batch lain ikut mengerjakan partai yang sama. Diperiksa ulang
                 # tepat sebelum dihitung supaya engine tidak mengulang kerja.
-                if not args.ulang and conn.execute(
+                if not (args.ulang or getattr(args, "dangkal", False)) and conn.execute(
                         "SELECT 1 FROM analisis WHERE partai_id = ?", (p_["id"],)).fetchone():
                     print(f"  [{i}/{len(daftar)}] {label(p_)}  sudah dianalisis di tempat lain, dilewati")
                     continue
+                # --dangkal: yang sudah DIPERDALAM di tempat lain (batch lain,
+                # pembantu tablet) sejak daftar dipilih juga dilewati. Dulu
+                # pemeriksaan ini mati total di mode dangkal (audit 27 Sep).
+                if getattr(args, "dangkal", False) and not args.ulang:
+                    r = conn.execute("SELECT profil FROM analisis WHERE partai_id = ?",
+                                     (p_["id"],)).fetchone()
+                    if r and r[0] not in PROFIL_DANGKAL:
+                        print(f"  [{i}/{len(daftar)}] {label(p_)}  sudah diperdalam di tempat lain, dilewati")
+                        continue
                 game = chess.pgn.read_game(io.StringIO(p_["pgn"]))
                 if game is None:
                     gagal += 1
@@ -429,9 +652,22 @@ def main() -> int:
                 t0 = time.time()
                 try:
                     lap = analisis_partai(game, sf, depth=depth)
-                except EngineError as e:
+                    mogok_beruntun = 0
+                except (EngineError, chess.engine.EngineError) as e:
+                    # chess.engine.EngineError (termasuk EngineTerminatedError
+                    # saat Stockfish mati) BUKAN turunan EngineError milik kita.
+                    # Dulu lolos dari sini dan membunuh seluruh batch (12 Sep:
+                    # dua batch mati dengan EngineTerminatedError). Sekarang
+                    # partai ini dilewati dan engine dinyalakan ulang.
                     gagal += 1
-                    print(f"  [{i}/{len(daftar)}] {label(p_)}  engine: {e}")
+                    mogok_beruntun += 1
+                    print(f"  [{i}/{len(daftar)}] {label(p_)}  engine: {e!r}", flush=True)
+                    if mogok_beruntun >= MAKS_MOGOK_BERUNTUN:
+                        print(f"\nEngine mogok {mogok_beruntun} kali berturut-turut; batch "
+                              "dihentikan. Masalahnya di engine, bukan di partai.")
+                        break
+                    sf.stop()
+                    sf.start()
                     continue
                 durasi = time.time() - t0
 
@@ -446,18 +682,22 @@ def main() -> int:
                     print(f"  [{i}/{len(daftar)}] {label(p_)}  gagal disimpan: {e}")
                     continue
                 selesai += 1
+                perkiraan_sisa.catat(durasi, p_["jumlah_langkah"])
 
                 rp, rh = lap.ringkasan_putih, lap.ringkasan_hitam
-                sisa = (time.time() - mulai) / i * (len(daftar) - i)
+                sisa_menit = perkiraan_sisa.menit(i) or 0.0
                 print(f"  [{i}/{len(daftar)}] {label(p_)}  "
-                      f"{rp.akurasi:5.1f}% / {rh.akurasi:5.1f}%  "
-                      f"?? {rp.blunder + rh.blunder}  {durasi:5.1f}s  sisa ~{sisa / 60:.0f}m")
-                tulis_kemajuan(i, len(daftar), sisa / 60, perintah_ini, jam_mulai)
+                      f"{_persen(rp.akurasi)} / {_persen(rh.akurasi)}  "
+                      f"?? {rp.blunder + rh.blunder}  {durasi:5.1f}s  sisa ~{sisa_menit:.0f}m")
+                tulis_kemajuan(i, len(daftar), sisa_menit, perintah_ini, jam_mulai)
     except KeyboardInterrupt:
         print("\nDihentikan. Yang sudah selesai tetap tersimpan; "
               "jalankan perintah yang sama untuk melanjutkan.")
-
-    hapus_kemajuan()
+    finally:
+        # Juga saat batch mati karena galat: berkas kemajuan yang tertinggal
+        # membuat halaman Mesin menampilkan batch hantu.
+        hapus_kemajuan()
+        lepas_klaim(klaim_aktif)
     st = statistik_analisis(conn)
     conn.close()
     print()
