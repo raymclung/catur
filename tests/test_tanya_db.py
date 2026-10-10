@@ -426,6 +426,41 @@ class TesKalimatJawaban(unittest.TestCase):
         self.assertEqual(kalimat_jawaban(["x"], [[None]]), "X: kosong.")
 
 
+class TesTemuanOllamaSungguhan(unittest.TestCase):
+    """Tiga hal yang baru kelihatan saat diuji dengan Ollama sungguhan (10 Okt 2026)."""
+
+    def test_kolom_id_tidak_dibacakan(self):
+        k = kalimat_jawaban(["id", "nama", "jumlah_partai"],
+                            [[7439, "Nakamura, Hikaru", 10440], [7151, "Carlsen, Magnus", 8024]])
+        self.assertEqual(k, "2 baris: Nakamura, Hikaru (jumlah partai 10.440); "
+                            "Carlsen, Magnus (jumlah partai 8.024).")
+        self.assertNotIn("7.439", k)
+
+    def test_kalau_semua_kolom_id_tetap_dibacakan(self):
+        self.assertEqual(kalimat_jawaban(["partai_id"], [[12]]), "Partai id: 12.")
+
+    def test_kalah_tanpa_kolom_hasil_diperingatkan(self):
+        sql = ("SELECT p.pembukaan, COUNT(*) AS jumlah_kalah FROM partai p JOIN analisis a "
+               "ON p.id = a.partai_id WHERE a.akurasi_hitam > 0 GROUP BY p.pembukaan")
+        pesan = peringatan_hasil(sql, [["Sicilian", 3]], "pembukaan apa yang paling sering saya kalah")
+        self.assertTrue(any("partai.hasil" in p for p in pesan))
+
+    def test_kalah_dengan_kolom_hasil_tidak_diperingatkan(self):
+        sql = "SELECT g.pembukaan, COUNT(*) AS n FROM partai g WHERE g.hasil = '0-1' GROUP BY 1"
+        pesan = peringatan_hasil(sql, [["Sicilian", 3]], "kapan saya kalah")
+        self.assertFalse(any("partai.hasil" in p for p in pesan))
+
+    def test_baris_teratas_null_diperingatkan(self):
+        pesan = peringatan_hasil("SELECT pembukaan, COUNT(*) FROM partai GROUP BY 1",
+                                 [[None, 825], ["Sicilian", 40]])
+        self.assertTrue(any("NULL" in p for p in pesan))
+
+    def test_prompt_menjelaskan_kalah_dari_hasil(self):
+        p = bangun_prompt("pembukaan apa yang paling sering saya kalah", "partai (1 baris)")
+        self.assertIn("BUKAN\n  dari akurasi", p)
+        self.assertIn("pembukaan IS NOT NULL", p)
+
+
 class TesCache(unittest.TestCase):
     """Cache menyimpan SQL, bukan hasil: LLM tidak dipanggil ulang, angka tetap segar."""
 

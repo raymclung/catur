@@ -18,7 +18,8 @@ sys.path.insert(0, str(AKAR))
 
 from app.db import buat_skema, koneksi, sekarang
 from app.sebab_kalah import (detik_dipakai, golongkan, jam_per_ply, jam_sendiri,
-                             kalah_waktu, kekalahan, pembukaan_kalah, posisi_akhir, tag_pgn)
+                             kalah_di, kalah_waktu, kekalahan, pembukaan_kalah, posisi_akhir,
+                             tag_pgn)
 
 PGN_WAKTU = """[Event "Rated blitz game"]
 [Site "https://lichess.org/abc"]
@@ -306,6 +307,59 @@ class PembukaanKalah(Kumpulan):
 
     def test_tanpa_akun(self):
         self.assertEqual(pembukaan_kalah(self.conn, [])["pembukaan"], [])
+
+    def test_tautan_latihan_hanya_untuk_repertoire_di_warna_yang_benar(self):
+        self.main(1, 2, "0-1", "B90", saya_putih=False)   # Hitam Sicilian -> repertoire
+        self.main(2, 2, "1-0", "B90")                     # Putih Sicilian -> bukan repertoire
+        self.main(3, 2, "1-0", "A15")                     # Putih English -> repertoire
+        self.main(4, 2, "1-0", "C60")                     # Ruy Lopez -> bukan
+        per = {(p["warna"], p["keluarga"]): p["latihan"]
+               for p in pembukaan_kalah(self.conn, [1], lawan="gmim")["pembukaan"]}
+        self.assertEqual(per[("hitam", "Sicilian Defense")], "Sicilian")
+        self.assertIsNone(per[("putih", "Sicilian Defense")])
+        self.assertEqual(per[("putih", "English Opening")], "English")
+        self.assertIsNone(per[("putih", "Ruy Lopez")])
+
+    def test_kalah_di_dari_golongan(self):
+        self.assertEqual(kalah_di({"sebab": "blunder", "ply": 10}), "pembukaan")
+        self.assertEqual(kalah_di({"sebab": "missclick", "ply": 24}), "tengah")   # batas = FASE ringkasan
+        self.assertEqual(kalah_di({"sebab": "blunder", "ply": 80}), "akhir")
+        self.assertEqual(kalah_di({"sebab": "waktu", "ply": None}), "waktu")
+        self.assertEqual(kalah_di({"sebab": "dikalahkan", "ply": None}), "dikalahkan")
+        self.assertEqual(kalah_di({"sebab": "belum", "ply": None}), "belum")
+
+    def test_kalah_di_dijumlah_per_baris(self):
+        self.main(1, 2, "1-0", "B90", saya_putih=False)                    # kalah, belum dianalisis
+        self.main(2, 2, "1-0", "B90", saya_putih=False)
+        self.conn.execute("INSERT INTO analisis(partai_id, engine, depth, profil, dianalisis_pada) "
+                          "VALUES(2, 'uji', 10, 'cepat', ?)", (sekarang(),))
+        # Sudut pandang Hitam: dari 0 ke -900 = blunder besar di ply 31 (tengah).
+        self.conn.execute("INSERT INTO analisis_langkah(partai_id, ply, nomor_langkah, warna, san, uci, "
+                          "kehilangan_cp, klasifikasi, eval_sebelum_cp, eval_sesudah_cp, eval_putih_cp) "
+                          "VALUES(2, 31, 16, 'hitam', 'Qxb2', 'd8b2', 900, 'blunder', 0, -900, 900)")
+        self.conn.commit()
+        p = pembukaan_kalah(self.conn, [1], lawan="gmim")["pembukaan"][0]
+        self.assertEqual(p["kalah"], 2)
+        self.assertEqual(p["kalah_di"]["belum"], 1)
+        self.assertEqual(p["kalah_di"]["tengah"], 1)
+        self.assertEqual(sum(p["kalah_di"].values()), p["kalah"])
+
+    def test_eco_rentang_untuk_tautan_latihan(self):
+        self.main(1, 2, "1-0", "B90", saya_putih=False)
+        self.main(2, 2, "1-0", "Z99", saya_putih=False)    # kode di luar KELUARGA -> kelompok cadangan
+        per = {p["keluarga"]: p["eco_rentang"]
+               for p in pembukaan_kalah(self.conn, [1], lawan="gmim")["pembukaan"]}
+        self.assertEqual(per["Sicilian Defense"], ["B20", "B99"])
+        self.assertIsNone(per["Zxx"])
+
+    def test_nama_latihan_sama_dengan_nama_soal(self):
+        """Tautan hanya berguna kalau namanya persis nilai `pembukaan` di soal."""
+        from app import latihan_pembukaan as lp
+        from app.sebab_kalah import LATIHAN_REPERTOIRE
+        self.assertTrue(set(LATIHAN_REPERTOIRE.values()) <= {lp.ENGLISH, lp.CATALAN, lp.SICILIAN, lp.RAGOZIN})
+        from app.eco import KELUARGA
+        nama_keluarga = {n for _, _, n in KELUARGA}
+        self.assertTrue({k for _, k in LATIHAN_REPERTOIRE} <= nama_keluarga)
 
 
 if __name__ == "__main__":

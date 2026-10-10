@@ -119,6 +119,53 @@
 
   /* ---------- tampilan ---------- */
 
+  /* Kolom "Kalah di": tempat kekalahan hilang, terbanyak dulu, yang terbesar
+     ditebalkan — supaya langsung terlihat apakah yang perlu diperbaiki teori
+     pembukaan, middlegame, atau jam (Ray, 10 Okt 2026). */
+  var LABEL_KALAH_DI = {
+    pembukaan: "pembukaan", tengah: "tengah", akhir: "akhir", waktu: "waktu",
+    dikalahkan: "dikalahkan", belum: "belum dianalisis"
+  };
+  var FASE_LATIH = { pembukaan: 1, tengah: 1, akhir: 1 };
+
+  /* Fase punya blunder yang bisa dilatih: angkanya jadi tautan ke Latihan
+     mode kesalahan, hanya partai keluarga ECO + warna ini, hanya kesalahan di
+     fase itu, dengan saringan lawan/format yang sedang dipilih di sini. */
+  function tautanLatihFase(p, fase) {
+    var u = new URLSearchParams();
+    u.set("eco_dari", p.eco_rentang[0]);
+    u.set("eco_sampai", p.eco_rentang[1]);
+    u.set("warna", p.warna);
+    u.set("fase", fase);
+    u.set("nama", p.keluarga);
+    u.set("lawan", el.lawan.value);
+    if (el.format.value !== "semua") u.set("format", el.format.value);
+    if (el.akun.value !== "semua") u.set("akun", el.akun.value);
+    return "/static/latihan.html?" + u.toString();
+  }
+
+  function selKalahDi(kd, p) {
+    var td = buat("td", "kecil");
+    var isi = Object.keys(LABEL_KALAH_DI).filter(function (k) { return kd[k]; })
+      .sort(function (a, b) { return kd[b] - kd[a]; });
+    isi.forEach(function (k, i) {
+      if (i) td.appendChild(teks(" · "));
+      var label = LABEL_KALAH_DI[k] + " " + kd[k];
+      if (FASE_LATIH[k] && p && p.eco_rentang) {
+        var a = document.createElement("a");
+        a.href = tautanLatihFase(p, k);
+        a.title = "Latih kesalahanmu di fase " + k + " dalam partai " + p.keluarga + " sebagai " +
+          (p.warna === "putih" ? "Putih" : "Hitam");
+        a.appendChild(i === 0 ? buat("strong", null, label) : teks(label));
+        td.appendChild(a);
+      } else {
+        td.appendChild(buat(i === 0 ? "strong" : "span", null, label));
+      }
+    });
+    if (!isi.length) td.appendChild(teks("—"));
+    return td;
+  }
+
   /* Pembukaan yang paling sering kalah (GET /api/kekalahan/pembukaan). Urutan
      dan tanda sampel kecil datang dari server; di sini hanya digambar. */
   function gambarPembukaan(d) {
@@ -130,7 +177,7 @@
     if (!d.pembukaan.length) {
       var tr0 = document.createElement("tr");
       var td0 = buat("td", "pesan kecil", "Tidak ada partai untuk saringan ini");
-      td0.colSpan = 7;
+      td0.colSpan = 8;
       tr0.appendChild(td0);
       el.barisPembukaan.appendChild(tr0);
       return;
@@ -149,6 +196,7 @@
       tr.appendChild(buat("td", "mono kecil", p.menang + " / " + p.remis + " / " + p.kalah));
       tr.appendChild(buat("td", "mono", p.skor_persen + "%"));
       tr.appendChild(buat("td", "mono", p.kalah + " (" + Math.round(p.kalah_persen) + "%)"));
+      tr.appendChild(selKalahDi(p.kalah_di || {}, p));
       var tdA = buat("td", "kecil");
       tdA.style.whiteSpace = "nowrap";
       if (p.kalah_terakhir) {
@@ -157,6 +205,16 @@
         a.title = "Kekalahan terakhir dengan pembukaan ini (" + (p.kalah_terakhir.tanggal || "?") + ")";
         a.appendChild(teks("kalah terakhir →"));
         tdA.appendChild(a);
+      }
+      /* Pembukaan repertoire: langsung ke soal posisi tempat Ray biasa keluar
+         dari jalur GM, hanya untuk pembukaan ini (Ray, 10 Okt 2026). */
+      if (p.latihan) {
+        if (p.kalah_terakhir) tdA.appendChild(teks("  "));
+        var l = document.createElement("a");
+        l.href = "/static/latihan.html?mode=pembukaan&pembukaan=" + encodeURIComponent(p.latihan);
+        l.title = "Soal pembukaan " + p.latihan + ": posisi tempat langkahmu jarang dimainkan GM";
+        l.appendChild(teks("latih →"));
+        tdA.appendChild(l);
       }
       tr.appendChild(tdA);
       el.barisPembukaan.appendChild(tr);

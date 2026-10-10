@@ -15,10 +15,12 @@ window.AlatCatur = (function () {
 
   var AMBANG_ELO_LAWAN = 2200;
 
-  /* mode: "ketentuan" (>2200 atau bergelar), "2200", "gelar", "semua" */
+  /* mode: "ketentuan" (>2200 atau bergelar), "2200", "gelar", "gmim" (GM/IM
+     saja, sama dengan app/sebab_kalah.py GELAR_GMIM), "semua" */
   function lolosLawan(g, warna, mode) {
     if (mode === "semua") return true;
     var gelar = warna === "putih" ? g.hitam_gelar : g.putih_gelar;
+    if (mode === "gmim") return gelar === "GM" || gelar === "IM";
     var eloLawan = warna === "putih" ? g.elo_hitam : g.elo_putih;
     var bergelar = !!gelar;
     var kuat = !!(eloLawan && eloLawan > AMBANG_ELO_LAWAN);
