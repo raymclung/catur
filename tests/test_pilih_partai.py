@@ -63,6 +63,22 @@ class UjiPilihPartai(unittest.TestCase):
         self.assertEqual(lama, list(reversed(semua))[:3])
         self.assertEqual(set(baru) & set(lama), set())
 
+    def test_tanpa_pgn_pilihan_sama_tanpa_isi_pgn(self):
+        """Pratinjau/cek kembar tidak memuat PGN (276 MB untuk --dangkal hemat),
+        tapi partai yang dipilih dan urutannya harus sama persis dengan CLI."""
+        for ubah in ({}, {"terbaru": 3}, {"terbaru": 3, "terlama": True}, {"hasil": "kalah"}):
+            with self.subTest(**ubah):
+                penuh = pilih_partai(self.conn, args(**ubah))
+                ringan = pilih_partai(self.conn, args(**ubah), tanpa_pgn=True)
+                self.assertEqual([p["id"] for p in ringan], [p["id"] for p in penuh])
+                self.assertTrue(all(p["pgn"] for p in penuh))
+                self.assertTrue(all(p["pgn"] is None for p in ringan))
+                self.assertEqual([p["jumlah_langkah"] for p in ringan],
+                                 [p["jumlah_langkah"] for p in penuh])
+                id_saja = pilih_partai(self.conn, args(**ubah), hanya_id=True)
+                self.assertEqual([p["id"] for p in id_saja], [p["id"] for p in penuh])
+                self.assertTrue(all(set(p) == {"id"} for p in id_saja))
+
     def test_akun_pribadi_jadi_sumber_kebenaran(self):
         self.assertEqual(nama_normal_saya(self.conn), ["rayylung"])
 

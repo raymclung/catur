@@ -12,7 +12,11 @@
    pandang Putih. Karena itu papan tidak perlu tahu engine mana yang menjawab.
 
    Satu worker, satu pekerjaan: permintaan baru menghentikan yang lama ("stop"),
-   dan hasil yang lama dibuang. Butuh chess.js (window.Chess) untuk SAN. */
+   dan hasil yang lama dibuang. Butuh chess.js (window.Chess) untuk SAN.
+
+   terus() (10 Okt 2026) = padanan GET /api/evaluasi/aliran untuk engine ini:
+   berpikir makin dalam sampai depth DEPTH_TERUS, batas waktu, atau dihentikan,
+   dan memanggil padaGaris() tiap kali satu depth selesai untuk semua garis. */
 
 (function () {
   "use strict";
@@ -20,6 +24,7 @@
   var ENGINE = "/pembantu/engine/stockfish-18-lite-single.js";
   var WAKTU_BAWAAN_MS = 1500;     // sama dengan bawaan `waktu` di /api/evaluasi
   var BATAS_SIAP_MS = 60000;      // muat WASM pertama kali di HP bisa lama
+  var DEPTH_TERUS = 30;           // sama dengan depth maksimum aliran server
 
   var worker = null;
   var siap = null;                // Promise sampai "readyok"
@@ -71,17 +76,27 @@
       var dalam = / depth (\d+)/.exec(baris);
       var pv = / pv (.+)$/.exec(baris);
       if (skor && pv) {
-        jalan.garis[mpv ? parseInt(mpv[1], 10) : 1] = {
+        var k = mpv ? parseInt(mpv[1], 10) : 1;
+        jalan.garis[k] = {
           jenis: skor[1], nilai: parseInt(skor[2], 10),
           depth: dalam ? parseInt(dalam[1], 10) : null,
           pv: pv[1].trim().split(/\s+/)
         };
+        /* Garis terakhir = satu depth selesai untuk semua garis. Posisi dengan
+           langkah sah lebih sedikit dari multipv tidak pernah mengirim garis
+           ke-multipv, jadi penandanya garis ke-min(multipv, langkah sah). */
+        if (jalan.padaGaris && !jalan.batal && k === Math.min(jalan.multipv, jalan.garisSah)) {
+          jalan.padaGaris(bentukHasil(jalan));
+        }
       }
     } else if (baris.indexOf("bestmove") === 0) {
       var selesai = jalan;
       jalan = null;
       if (selesai.batal) selesai.gagal(galatBatal());
-      else selesai.selesai(bentukHasil(selesai));
+      else if (selesai.padaGaris) {
+        var h = bentukHasil(selesai);
+        selesai.selesai({ alasan: (h.depth || 0) >= DEPTH_TERUS ? "depth-maks" : "batas-waktu", hasil: h });
+      } else selesai.selesai(bentukHasil(selesai));
       if (antre) { var berikut = antre; antre = null; mulai(berikut); }
     }
   }
@@ -113,9 +128,10 @@
       });
     }
     var utama = garis[0] || {};
+    var durasi = Date.now() - t.mulai;
     return {
       fen: t.fen, profil: "browser", depth: utama.depth || null,
-      durasi_ms: Date.now() - t.mulai, garis: garis,
+      durasi_ms: durasi, detik: Math.round(durasi / 100) / 10, garis: garis,
       skor: { cp: utama.cp === undefined ? null : utama.cp, mate: utama.mate === undefined ? null : utama.mate },
       giliran: t.putihJalan ? "putih" : "hitam", selesai: false
     };
@@ -139,7 +155,7 @@
     t.mulai = Date.now();
     worker.postMessage("setoption name MultiPV value " + t.multipv);
     worker.postMessage("position fen " + t.fen);
-    worker.postMessage(t.depth ? "go depth " + t.depth : "go movetime " + WAKTU_BAWAAN_MS);
+    worker.postMessage(t.go || (t.depth ? "go depth " + t.depth : "go movetime " + WAKTU_BAWAAN_MS));
   }
 
   /* opsi: {multipv, depth (opsional), signal (AbortSignal, opsional)} */
@@ -147,11 +163,29 @@
     opsi = opsi || {};
     var akhir = posisiSelesai(fen);
     if (akhir) return Promise.resolve(akhir);
+    return kerjakan(fen, opsi, null, null);
+  }
+
+  /* Analisis tanpa henti. opsi: {multipv, batasDetik, signal, padaGaris(hasil)}.
+     Selesai -> {alasan: "depth-maks"|"batas-waktu"|"posisi-selesai", hasil};
+     dihentikan lewat signal -> AbortError, sama seperti evaluasi(). */
+  function terus(fen, opsi) {
+    opsi = opsi || {};
+    var akhir = posisiSelesai(fen);
+    if (akhir) return Promise.resolve({ alasan: "posisi-selesai", hasil: akhir });
+    var batasMs = Math.max(1, parseFloat(opsi.batasDetik) || 120) * 1000;
+    return kerjakan(fen, opsi, "go depth " + DEPTH_TERUS + " movetime " + Math.round(batasMs),
+                    opsi.padaGaris || function () {});
+  }
+
+  function kerjakan(fen, opsi, go, padaGaris) {
     return nyalakan().then(function () {
       return new Promise(function (selesai, gagal) {
+        var g = new Chess(fen);
         var t = {
           fen: fen, multipv: Math.max(1, Math.min(5, parseInt(opsi.multipv, 10) || 1)),
           depth: parseInt(opsi.depth, 10) || 0, putihJalan: fen.split(/\s+/)[1] !== "b",
+          garisSah: g.moves().length, go: go, padaGaris: padaGaris,
           garis: {}, batal: false, selesai: selesai, gagal: gagal
         };
         if (opsi.signal) {
@@ -173,5 +207,5 @@
     });
   }
 
-  window.EngineBrowser = { evaluasi: evaluasi, ENGINE: ENGINE };
+  window.EngineBrowser = { evaluasi: evaluasi, terus: terus, ENGINE: ENGINE, DEPTH_TERUS: DEPTH_TERUS };
 })();

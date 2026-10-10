@@ -226,7 +226,14 @@
   }
 
   /* Partai teranalisis satu akun, dengan warna akun itu di tiap partai.
-     Saringan format dikerjakan server (kolom `format`, Permintaan API #8). */
+     Saringan format dikerjakan server (kolom `format`, Permintaan API #8).
+
+     Halaman berikutnya diambil sampai `batas` partai LOLOS saringan lawan.
+     Dulu hanya satu halaman (100 partai) yang disaring di sini, jadi batas
+     250 tidak pernah tercapai: 10 Okt 2026 akun 2 dapat 65 partai padahal
+     3.121 lolos, akun 6014 dapat 30 dari 359. MAKS_HALAMAN menjaga akun
+     dengan sedikit lawan kuat dari membaca ribuan partai. */
+  var MAKS_HALAMAN = 10;
   function partaiAkun(id, batas) {
     var q = "/api/partai?pemain_id=" + id + "&dianalisis=true&per_halaman=100&urut=terbaru";
     if (el.format.value !== "semua") q += "&format=" + el.format.value;
@@ -234,11 +241,20 @@
       q += "&eco_dari=" + saringKesalahan.eco_dari + "&eco_sampai=" + saringKesalahan.eco_sampai;
     }
     if (saringKesalahan && saringKesalahan.warna) q += "&warna=" + saringKesalahan.warna;
-    return ambil(q).then(function (d) {
-      return d.partai.map(function (g) { return { g: g, warna: g.putih_id === id ? "putih" : "hitam" }; })
-        .filter(function (x) { return lolosLawan(x.g, x.warna); })
-        .slice(0, batas);
-    });
+    var hasil = [];
+    function halaman(n) {
+      return ambil(q + "&halaman=" + n).then(function (d) {
+        d.partai.forEach(function (g) {
+          var x = { g: g, warna: g.putih_id === id ? "putih" : "hitam" };
+          if (lolosLawan(x.g, x.warna)) hasil.push(x);
+        });
+        if (hasil.length >= batas || n >= d.jumlah_halaman || n >= MAKS_HALAMAN) {
+          return hasil.slice(0, batas);
+        }
+        return halaman(n + 1);
+      });
+    }
+    return halaman(1);
   }
 
   /* Soal dari satu partai + analisisnya. warnaDiambil null = kedua warna. */
@@ -325,8 +341,10 @@
       if (!partai.length) throw new Error("Belum ada partai akun ini yang dianalisis. Jalankan: python analisis_partai.py (lihat README).");
       /* satu per satu supaya server tidak dibanjiri puluhan permintaan sekaligus */
       var rantai = Promise.resolve();
-      partai.forEach(function (x) {
+      partai.forEach(function (x, i) {
         rantai = rantai.then(function () {
+          /* sampai ±250 permintaan berurutan (±7 detik): tunjukkan bahwa ia jalan */
+          el.status.textContent = "mengumpulkan soal… partai " + (i + 1) + "/" + partai.length;
           return ambil("/api/partai/" + x.g.id + "/analisis").then(function (a) {
             tambahSoal(x.g, a, x.warna, jenis);
           }).catch(function () { /* partai tanpa analisis dilewati */ });

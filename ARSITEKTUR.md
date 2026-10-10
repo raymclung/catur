@@ -1075,9 +1075,20 @@ Posisi yang sudah selesai (mat/remis) dijawab tanpa memanggil engine:
 
 ### Ditunda ke versi berikutnya (dicatat, bukan dilupakan)
 
-Yang masih ditunda: engine di browser (WASM) untuk papan analisis.
+Tidak ada yang masih ditunda (diperiksa ulang 10 Okt 2026).
 
 Yang dulu tercatat di sini dan sekarang sudah ada (diperiksa 9 Okt 2026):
+
+- **Engine di browser (WASM)** — pilihan "Engine: perangkat ini" di
+  `/analisis` (`web/engine-browser.js`, Stockfish 18 lite satu inti di Web
+  Worker, berkas yang sama dengan halaman Pembantu). Bentuk hasilnya sama
+  dengan `/api/evaluasi`, jadi tampilan tidak tahu engine mana yang menjawab.
+  Sejak 10 Okt 2026 **Terus** juga berlaku untuknya (`EngineBrowser.terus()`:
+  `go depth 30 movetime <batas>`, kirim hasil tiap depth selesai) dan ada tes
+  otomatis di peramban sungguhan lewat DevTools Protocol
+  (`tests/test_engine_browser.py`; `--dump-dom` tidak bisa karena waktu palsu
+  `--virtual-time-budget` menghentikan Web Worker). Bukti di :8000, posisi
+  sama, Terus 5 detik: laptop depth 8 → 16, perangkat depth 7 → 19.
 
 - **Analisis tanpa henti** — tombol **Terus** di `/analisis`,
   `GET /api/evaluasi/aliran` (`app/evaluasi_aliran.py`, SSE). Engine dan
@@ -1383,3 +1394,24 @@ dipinjamkan ke perangkat itu (atau, kalau sewanya kedaluwarsa, partai yang
 masih perlu dianalisis — hasil yang ada tidak pernah tertimpa), dan alamat
 untuk batas tebakan kode hanya mempercayai `CF-Connecting-IP` dari koneksi
 lokal (cloudflared), bukan `X-Forwarded-For`/`X-Real-IP` kiriman pengirim.
+
+## Catatan lintas fase: jejak siapa yang mengendalikan mesin (10 Okt 2026)
+
+10 Okt 15:54 dua batch analisis teliti dihentikan lewat `/api/analisa/hentikan`
+dan tidak ada yang bisa menjawab siapa: status tugas cuma "dihentikan", dan
+`log-server.txt` ditimpa waktu server di-restart 15:57. Dua perbaikan:
+
+- `app/jejak_kendali.py`: `/hentikan`, `/jeda` (dua arah), dan mematikan
+  penjaga (`/antrean/jaga?jalan=false`) menambah satu baris ke
+  `data/laporan/log-kendali-mesin.txt` — hanya ditambah, tidak pernah ditulis
+  ulang, terpisah dari log server. Tugas yang dihentikan menyimpan
+  `dihentikan_oleh`; body `/hentikan` menerima `alasan` opsional.
+- `jalankan-server.cmd` memindah log server lama ke `data/laporan/server-lama/`
+  (30 terbaru) sebelum server baru menyala, bukannya menimpanya.
+
+**Batas yang diterima:** server lokal tidak bisa tahu SESI mana yang mengirim
+permintaan. Yang dicatat hanya yang jujur diketahui: alamat, halaman asal
+(Referer), User-Agent (halaman Mesin di browser vs curl/Python/PowerShell), dan
+alasan kalau pengirim mengisinya. Sesi yang me-restart server dengan caranya
+sendiri (bukan lewat pintasan) tetap bisa menimpa `log-server.txt`; jejak
+kendali tidak ikut hilang karena berkasnya lain.

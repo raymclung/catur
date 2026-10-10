@@ -155,10 +155,18 @@ def nama_normal_saya(conn=None) -> list[str]:
     return [normalisasi_nama(a.username) for a in AKUN]
 
 
-def pilih_partai(conn, args) -> list[dict]:
+def pilih_partai(conn, args, tanpa_pgn: bool = False, hanya_id: bool = False) -> list[dict]:
     """
     Bangun query pemilihan partai dari argumen. Semua nilai lewat parameter.
     Partai yang sudah dianalisis disingkirkan kecuali --ulang.
+
+    tanpa_pgn=True untuk pemanggil yang hanya menghitung atau membandingkan
+    id (pratinjau dan cek batch kembar di app/analisa_web.py): `--dangkal
+    --profil hemat` memilih 268.145 partai = 276 MB PGN (diukur 10 Okt 2026),
+    dan cek kembar memuatnya sekali per batch yang sedang berjalan.
+    hanya_id=True (cek kembar, yang hanya membandingkan himpunan id): tiap
+    dict cuma berisi "id". Puncak memori untuk pilihan yang sama: 566 MB
+    lengkap, 276 MB tanpa PGN, 18 MB hanya id.
     """
     syarat, params = [], []
 
@@ -301,13 +309,15 @@ def pilih_partai(conn, args) -> list[dict]:
     # akhirnya bertemu, partai yang sudah dianalisis batch lain dilewati di
     # jalankan(). Ray, 27 Sep 2026: "saya ingin membantu lebih cepat".
     urut = "ASC" if getattr(args, "terlama", False) else "DESC"
+    kolom_pgn = "NULL" if tanpa_pgn else "g.pgn"
+    kolom = "g.id" if hanya_id else f"""g.id, {kolom_pgn} AS pgn, g.jumlah_langkah, g.hasil, g.eco,
+               pw.nama AS putih, pb.nama AS hitam,
+               pw.gelar AS putih_gelar, pb.gelar AS hitam_gelar,
+               g.elo_putih, g.elo_hitam"""
 
     baris = conn.execute(
         f"""
-        SELECT g.id, g.pgn, g.jumlah_langkah, g.hasil, g.eco,
-               pw.nama AS putih, pb.nama AS hitam,
-               pw.gelar AS putih_gelar, pb.gelar AS hitam_gelar,
-               g.elo_putih, g.elo_hitam
+        SELECT {kolom}
         FROM partai g
         JOIN pemain pw ON pw.id = g.putih_id
         JOIN pemain pb ON pb.id = g.hitam_id

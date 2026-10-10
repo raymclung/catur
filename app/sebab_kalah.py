@@ -36,7 +36,7 @@ from .analisis_db import mat_dari_sudut_pemain
 from .db import koneksi
 from .eco import KELUARGA, keluarga_eco
 from .ringkasan import FASE
-from .latihan_pembukaan import CATALAN, ENGLISH, RAGOZIN, SICILIAN
+from .latihan_pembukaan import CATALAN, ENGLISH, RAGOZIN, SICILIAN, pembukaan_repertoire
 
 router = APIRouter(prefix="/api", tags=["kekalahan"])
 
@@ -54,9 +54,14 @@ GELAR_GMIM = ("GM", "IM")
 SAMPEL_KECIL = 5        # di bawah ini satu-dua partai sudah membalik persentasenya
 
 # Baris kartu pembukaan -> nama repertoire di soal latihan pembukaan, supaya
-# halaman Kekalahan bisa menaut "latih ->" (Ray, 10 Okt 2026). Kunci = warna
-# Ray x keluarga ECO (eco.py). Latihan menggolongkan dari langkah, bukan ECO,
-# jadi pemetaan ini perkiraan: baris yang tidak ada di sini tidak diberi tautan.
+# halaman Kekalahan bisa menaut "latih ->" (Ray, 10 Okt 2026).
+#
+# Sejak 10 Okt malam tautannya ditentukan dari LANGKAH tiap partai, dengan
+# fungsi yang sama dengan Latihan (`pembukaan_repertoire`), bukan dari ECO:
+# diukur pada 12.427 partai akun, kartu Hitam "Queen's Pawn (London, Colle)"
+# 73% Ragozin/QGD dan Putih "Queen's Gambit Declined" 58% English
+# (transposisi 1.c4), padahal pemetaan ECO memberi keduanya tanpa tautan.
+# Tabel ini tinggal CADANGAN untuk partai yang belum punya indeks posisi.
 LATIHAN_REPERTOIRE = {
     ("putih", "English Opening"): ENGLISH,
     ("putih", "Catalan Opening"): CATALAN,
@@ -65,6 +70,8 @@ LATIHAN_REPERTOIRE = {
     ("hitam", "Queen's Gambit Declined"): RAGOZIN,
 }
 SEBAB_URUT = ("waktu", "missclick", "blunder", "dikalahkan", "belum")
+PLY_REPERTOIRE = 12     # pembukaan_repertoire hanya melihat enam langkah pertama tiap pihak
+PORSI_TAUTAN = 0.5      # kartu bertaut kalau repertoire ini menguasai setidaknya separuh partainya
 
 
 # ----------------------------------------------------------------- PGN
@@ -292,6 +299,45 @@ def fase_ply(ply: int) -> str:
     return FASE[-1][0]
 
 
+def langkah_awal(conn: sqlite3.Connection, ids: list[int]) -> dict[int, list[str]]:
+    """
+    UCI ply 0..PLY_REPERTOIRE-1 per partai, dari indeks posisi (tanpa mem-parse
+    PGN: 12.427 partai dalam ±0,9 s). Partai yang indeksnya bolong tidak
+    dikembalikan — jangan menggolongkan dari langkah yang tidak lengkap.
+    """
+    per_partai: dict[int, list[tuple[int, str]]] = {}
+    for i in range(0, len(ids), POTONGAN_ID):
+        potong = ids[i:i + POTONGAN_ID]
+        q = f"""SELECT partai_id, ply, langkah_uci FROM posisi
+                WHERE partai_id IN ({",".join("?" * len(potong))}) AND ply < ?
+                ORDER BY partai_id, ply"""
+        for pid, ply, uci in conn.execute(q, [*potong, PLY_REPERTOIRE]):
+            per_partai.setdefault(pid, []).append((ply, uci))
+    return {pid: [u for _, u in b] for pid, b in per_partai.items()
+            if [p for p, _ in b] == list(range(len(b))) and all(u for _, u in b)}
+
+
+def repertoire_kartu(anggota: list[tuple[int, str]], keluarga: str,
+                     awal: dict[int, list[str]]) -> tuple[str | None, int]:
+    """
+    (nama repertoire, porsi %) untuk satu kartu. `anggota` = [(id, warna Ray)].
+    Partai ber-indeks digolongkan dari langkahnya; yang tidak, dari tabel ECO
+    cadangan. Tautan hanya kalau satu repertoire menguasai >= PORSI_TAUTAN.
+    """
+    hitung: dict[str, int] = {}
+    for pid, warna in anggota:
+        nama = (pembukaan_repertoire(awal[pid], warna) if pid in awal
+                else LATIHAN_REPERTOIRE.get((warna, keluarga)))
+        if nama:
+            hitung[nama] = hitung.get(nama, 0) + 1
+    if not anggota or not hitung:
+        return None, 0
+    nama, n = max(hitung.items(), key=lambda x: (x[1], x[0]))
+    if n < PORSI_TAUTAN * len(anggota):
+        return None, round(100 * n / len(anggota))
+    return nama, round(100 * n / len(anggota))
+
+
 # Nama keluarga ECO -> [kode_awal, kode_akhir] (eco.KELUARGA).
 RENTANG_KELUARGA = {nama: [awal, akhir] for awal, akhir, nama in KELUARGA}
 
@@ -408,6 +454,7 @@ def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: st
 
     kel: dict[tuple, dict] = {}
     kalah_ke: dict[int, tuple] = {}     # id partai kalah -> (warna Ray, kunci baris)
+    anggota: dict[tuple, list] = {}     # kunci baris -> [(id partai, warna Ray)]
     total = {"partai": 0, "menang": 0, "remis": 0, "kalah": 0}
     for r in conn.execute(sql, params):
         warna = r["warna_saya"]
@@ -422,6 +469,7 @@ def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: st
             hasil = "menang" if (r["hasil"] == "1-0") == (warna == "putih") else "kalah"
         d["partai"] += 1
         d[hasil] += 1
+        anggota.setdefault((warna, keluarga), []).append((r["id"], warna))
         total["partai"] += 1
         total[hasil] += 1
         if r["pembukaan"]:
@@ -450,16 +498,21 @@ def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: st
             gol = golongkan(r["pgn"] or "", r["kontrol_waktu"], warna, milik, bool(r["dianalisis"]))
             kel[kunci]["kalah_di"][kalah_di(gol)] += 1
 
+    awal = langkah_awal(conn, [pid for a in anggota.values() for pid, _ in a])
     keluar = []
-    for d in kel.values():
+    for kunci, d in kel.items():
         nama = sorted(d.pop("nama").items(), key=lambda x: -x[1])
+        latihan, porsi = repertoire_kartu(anggota.get(kunci, []), d["keluarga"], awal)
         keluar.append({
             **d,
             "skor_persen": round(100 * (d["menang"] + 0.5 * d["remis"]) / d["partai"], 1),
             "kalah_persen": round(100 * d["kalah"] / d["partai"], 1),
             "sampel_kecil": d["partai"] < SAMPEL_KECIL,
             "contoh_nama": [n for n, _ in nama[:2]],
-            "latihan": LATIHAN_REPERTOIRE.get((d["warna"], d["keluarga"])),
+            "latihan": latihan,
+            # Bagian partai kartu ini yang tergolong repertoire teratas menurut
+            # langkahnya; < 50 berarti tidak bertaut.
+            "latihan_porsi": porsi,
             # Rentang ECO keluarga ini, untuk menaut ke Latihan mode kesalahan
             # (/api/partai?eco_dari=&eco_sampai=). Kelompok cadangan "Bxx" /
             # "Tanpa ECO" tidak punya rentang, jadi tidak bertaut.

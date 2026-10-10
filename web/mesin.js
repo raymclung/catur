@@ -404,9 +404,18 @@
     el.angka.appendChild(kotakAngka(angka(d.belum_gm), "partai GM belum",
       d.belum_gm ? "status-dipakai" : ""));
     el.bar.style.width = Math.max(persen, persen > 0 ? 0.4 : 0) + "%";
+    var bisa = d.partai_bisa_dianalisis || d.partai_total;
+    /* BUKAN total - bisa: sebagian partai pendek/'*' tetap dianalisis lewat
+       --id (67 per 10 Okt), jadi yang benar-benar tak tersentuh = total -
+       sudah - belum. */
+    var tidakDipilih = Math.max(0, d.partai_total - d.partai_dianalisis -
+                                   (d.belum_saya || 0) - (d.belum_gm || 0));
     el.catatanKemajuan.textContent =
       persen.toLocaleString("id-ID", { maximumFractionDigits: 1 }) + "% dari " +
-      angka(d.partai_total) + " partai · " + angka(d.langkah_dianalisis) + " langkah dinilai engine";
+      angka(bisa) + " partai yang bisa dianalisis · " + angka(d.langkah_dianalisis) +
+      " langkah dinilai engine" +
+      (tidakDipilih > 0 ? " · " + angka(tidakDipilih) +
+        " partai lain tidak dianalisis (di bawah 10 langkah atau belum selesai)" : "");
   }
 
   /* ---------- daftar pemain ----------
@@ -690,7 +699,14 @@
 
   function muatStatus() {
     return fetch("/api/analisa/status").then(function (r) { return r.json(); }).then(function (d) {
-      var persen = d.partai_total ? (d.partai_dianalisis / d.partai_total * 100) : 0;
+      /* Penyebutnya partai yang BISA dianalisis, bukan semua partai: partai
+         < 10 langkah dan yang belum selesai ('*') tidak pernah dipilih, jadi
+         bilah dulu berhenti di 99,1% walau "belum" sudah 0 (Ray, 10 Okt). */
+      var bisa = d.partai_bisa_dianalisis || d.partai_total;
+      var belum = (d.belum_saya || 0) + (d.belum_gm || 0);
+      var persen = bisa ? ((bisa - belum) / bisa * 100) : 0;
+      /* 5 sisa dari 272 ribu = 99,998% -> tampil "100%" padahal belum habis. */
+      if (belum > 0) persen = Math.min(persen, 99.9);
       tampilkanAngka(d, persen);
       isiSumber(d.sumber);
 

@@ -43,9 +43,10 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from . import jejak_kendali
 from .db import FOLDER_DATA, koneksi
 
 router = APIRouter(prefix="/api/analisa", tags=["analisa"])
@@ -144,6 +145,9 @@ class Saringan(BaseModel):
 
 class Penghentian(BaseModel):
     pid: int
+    # Opsional: dicatat di jejak kendali (app/jejak_kendali.py). Sesi yang
+    # menghentikan batch lewat curl sebaiknya mengisinya.
+    alasan: str = Field("", max_length=200)
 
 
 # ------------------------------------------------------------------ bantu
@@ -196,16 +200,22 @@ def daftar_sumber(conn: sqlite3.Connection) -> list[dict]:
     # sekali; analisis dicek lewat indeks uniknya. Dulu tiga kueri memindai
     # seluruh partai: 10 detik tiap cache angka habis saat disk dingin
     # (29 Sep 2026), padahal halaman Mesin bertanya tiap 5 detik.
+    # INDEXED BY sejak v13 (10 Okt 2026): idx_partai_sumber_tanggal_urut juga
+    # berawalan sumber, dan perencana memilihnya untuk GROUP BY sumber — tapi
+    # ia TIDAK menutup hasil/jumlah_langkah, jadi baris ber-PGN terbaca lagi
+    # (3,5 s di database asli). Kalau indeksnya hilang, SQLite menolak keras.
     q = f"""
         SELECT g.sumber AS nama, COUNT(*) AS partai,
+               SUM(CASE WHEN {SYARAT_BISA_DIPILIH} THEN 1 ELSE 0 END) AS bisa,
                SUM(CASE WHEN a.partai_id IS NULL AND {SYARAT_BISA_DIPILIH}
                         THEN 1 ELSE 0 END) AS belum
-        FROM partai g
+        FROM partai g INDEXED BY idx_partai_bisa_dipilih
         LEFT JOIN analisis a ON a.partai_id = g.id
         WHERE g.sumber IS NOT NULL
         GROUP BY g.sumber ORDER BY partai DESC
     """
-    return [{"nama": r["nama"], "partai": r["partai"], "belum": r["belum"] or 0,
+    return [{"nama": r["nama"], "partai": r["partai"], "bisa": r["bisa"] or 0,
+             "belum": r["belum"] or 0,
              "pribadi": r["nama"] in SUMBER_SAYA}
             for r in conn.execute(q)]
 
@@ -381,7 +391,7 @@ def _hitung(s: Saringan) -> dict:
 
     conn = _buka()
     try:
-        daftar = m.pilih_partai(conn, _ruang_nama(s))
+        daftar = m.pilih_partai(conn, _ruang_nama(s), tanpa_pgn=True)
         profil = PROFIL[s.profil]
         total_ply = sum(p["jumlah_langkah"] * 2 for p in daftar)
         terukur = m.detik_per_ply_terukur(conn, s.profil)
@@ -476,6 +486,7 @@ def angka_database(conn: sqlite3.Connection) -> dict:
         "sumber": sumber,
         "belum_saya": sum(s["belum"] for s in sumber if s["pribadi"]),
         "belum_gm": sum(s["belum"] for s in sumber if not s["pribadi"]),
+        "bisa": sum(s["bisa"] for s in sumber),
     }
     _angka.update(waktu=sekarang, hasil=hasil)
     return hasil
@@ -599,7 +610,7 @@ def _bentrok(s: Saringan, lain: list[tuple], conn, m) -> list[tuple[dict, int]]:
     dari arah berlawanan tidak dihitung — keduanya bertemu di tengah dan
     jalankan() melewati partai yang sudah dianalisis di tempat lain.
     """
-    ids = {p["id"] for p in m.pilih_partai(conn, _ruang_nama(s))}
+    ids = {p["id"] for p in m.pilih_partai(conn, _ruang_nama(s), hanya_id=True)}
     teks = " ".join(_perintah(s))
     hasil = []
     for b, args, ids_b in lain:
@@ -636,7 +647,8 @@ def _hindari_kembar(s: Saringan, berjalan: list[dict]) -> tuple[Saringan, str | 
         lain = []
         for b in berjalan:
             args = m.argumen_dari_perintah(b.get("perintah") or "")
-            ids_b = {p["id"] for p in m.pilih_partai(conn, args)} if args else None
+            ids_b = ({p["id"] for p in m.pilih_partai(conn, args, hanya_id=True)}
+                     if args else None)
             lain.append((b, args, ids_b))
         kena = _bentrok(s, lain, conn, m)
         if not kena:
@@ -792,6 +804,11 @@ def status():
     return {
         "partai_dianalisis": st["partai_dianalisis"],
         "partai_total": st["partai_total"],
+        # Penyebut bilah kemajuan. partai_total ikut menghitung partai yang
+        # TIDAK PERNAH dipilih (< 10 langkah atau '*'), jadi bilah berhenti di
+        # 99,1% walau "belum" sudah 0 (Ray, 10 Okt 2026: 2.449 partai pendek
+        # + 3 '*' dari 274.977). Sumber NULL tidak dihitung daftar_sumber().
+        "partai_bisa_dianalisis": angka["bisa"],
         "langkah_dianalisis": st["langkah_dianalisis"],
         "belum_saya": angka["belum_saya"],
         "belum_gm": angka["belum_gm"],
@@ -902,7 +919,7 @@ def bersihkan_antrean():
 
 
 @router.post("/antrean/jaga", summary="Hidupkan/matikan penjaga antrean")
-def jaga_antrean(jalan: bool = True, maks: int = MAKS_BATCH):
+def jaga_antrean(jalan: bool = True, maks: int = MAKS_BATCH, request: Request = None):
     """
     Penjaga dijalankan sebagai proses LEPAS, sama seperti batch: dia harus
     tetap hidup walau server dimuat ulang atau halaman ditutup.
@@ -913,6 +930,8 @@ def jaga_antrean(jalan: bool = True, maks: int = MAKS_BATCH):
             return {"penjaga_pid": None, "status": "memang tidak jalan"}
         # hanya penjaganya; batch yang sedang jalan dibiarkan selesai
         _matikan(pid, pohon=False)
+        jejak_kendali.catat("matikan penjaga", jejak_kendali.asal_permintaan(request),
+                            f"PID {pid}")
         return {"penjaga_pid": None, "status": "dihentikan"}
     if pid is not None:
         return {"penjaga_pid": pid, "status": "sudah jalan"}
@@ -961,18 +980,20 @@ def ubah_batas_cpu(persen: int):
 
 
 @router.post("/jeda", summary="Jeda atau lanjutkan semua engine di laptop ini")
-def jeda_semua(aktif: bool = True):
+def jeda_semua(aktif: bool = True, request: Request = None):
     """
     aktif=true: bekukan semua Stockfish (CPU kosong seketika) dan tahan batch
     baru. aktif=false: cairkan dan izinkan lagi. Lihat app/jeda_mesin.py.
     """
     from . import jeda_mesin                 # noqa: PLC0415
     _pindai["waktu"] = 0.0
+    jejak_kendali.catat("jeda" if aktif else "lanjutkan jeda",
+                        jejak_kendali.asal_permintaan(request))
     return jeda_mesin.jeda() if aktif else jeda_mesin.lanjutkan()
 
 
 @router.post("/hentikan", summary="Hentikan satu batch analisis")
-def hentikan(masukan: Penghentian):
+def hentikan(masukan: Penghentian, request: Request = None):
     _pindai["waktu"] = 0.0
     if not _hidup(masukan.pid):
         raise HTTPException(status_code=404,
@@ -985,9 +1006,13 @@ def hentikan(masukan: Penghentian):
     from . import antrean as antre                 # noqa: PLC0415
     ditandai = [k for k in antre.baca()
                 if k.get("pid") == masukan.pid and k.get("status") == "jalan"]
+    # Siapa yang menghentikan dicatat SEBELUM prosesnya mati: 10 Okt 15:54 dua
+    # batch berhenti dan tidak ada yang bisa menjawab siapa (app/jejak_kendali.py).
+    asal = jejak_kendali.asal_permintaan(request, masukan.alasan)
     for k in ditandai:
         antre.perbarui(k["id"], status="batal", sampai=datetime.now().strftime("%Y-%m-%d %H:%M"),
-                       alasan=f"dihentikan dari halaman Mesin (PID {masukan.pid})")
+                       alasan=f"dihentikan (PID {masukan.pid}) lewat "
+                              f"{jejak_kendali.teks_asal(asal)}")
     try:
         _matikan(masukan.pid)
     except Exception:
@@ -1001,6 +1026,8 @@ def hentikan(masukan: Penghentian):
             if t.get("pid") == masukan.pid and t.get("status") == "berjalan":
                 t["status"] = "dihentikan"
                 t["sampai"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                t["dihentikan_oleh"] = asal
+    jejak_kendali.catat("hentikan batch", asal, f"PID {masukan.pid}")
     return {"pid": masukan.pid, "status": "dihentikan",
             "catatan": "Partai yang sudah selesai tetap tersimpan; partai yang sedang "
                        "dihitung akan terpilih lagi di batch berikutnya. Pakai "

@@ -37,6 +37,8 @@ data/tugas-analisa.json
 # Log jalannya perintah (turunan; dibuat ulang dengan menjalankan ulang).
 # Beberapa log lama sengaja ter-track sebagai bukti dan tetap disimpan.
 data/laporan/log-*.txt
+# log server lama yang dipindah jalankan-server.cmd (10 Okt 2026)
+data/laporan/server-lama/
 # catatan kemajuan batch engine: turunan, satu berkas per pid yang hidup
 data/laporan/.kemajuan-*.json
 
