@@ -222,6 +222,8 @@ class Penjagaan(unittest.TestCase):
         # kolom yang dibaca daftar_sumber() untuk angka "belum" (skema asli selalu punya)
         conn.execute("CREATE TABLE partai (id INTEGER PRIMARY KEY, sumber TEXT, "
                      "jumlah_langkah INTEGER DEFAULT 40, hasil TEXT DEFAULT '1-0')")
+        # daftar_sumber() memakai INDEXED BY sejak v13; skema asli selalu punya.
+        conn.execute("CREATE INDEX idx_partai_bisa_dipilih ON partai(sumber, hasil, jumlah_langkah)")
         conn.execute("CREATE TABLE analisis (partai_id INTEGER)")
         for i, s in enumerate(sumber, start=1):
             conn.execute("INSERT INTO partai (id, sumber) VALUES (?, ?)", (i, s))
@@ -571,6 +573,33 @@ class DaftarPemain(unittest.TestCase):
         self.assertEqual([h["belum"] for h in aw.daftar_pemain(self.conn, batas=10)
                           if h["nama"] == "Tal, Mihail"], [2])
 
+    def test_penyebut_bilah_hanya_partai_yang_bisa_dipilih(self):
+        """10 Okt 2026 (Ray): "belum" 0 tapi bilah 99,1% — penyebutnya semua
+        partai, termasuk 2.449 yang < 10 langkah dan 3 '*'. Bilah = (bisa −
+        belum) / bisa harus 100% begitu yang bisa dipilih sudah habis."""
+        from app import analisa_web as aw
+        a = self.pemain("Tal, Mihail", "GM")
+        b = self.pemain("Tukmakov, Vladimir B", "GM")
+        self.partai(a, b, "pgnmentor", hasil="*")                   # tak pernah dipilih
+        self.partai(a, b, "pgnmentor", langkah=5, n=3)              # terlalu pendek
+        self.partai(a, b, "pgnmentor", hasil="*", dianalisis=True)  # dianalisis via --id
+        self.partai(a, b, "pgnmentor", dianalisis=True, n=2)        # sudah
+        self.partai(a, b, "twic")                                   # belum
+        aw._angka["hasil"] = None
+        angka = aw.angka_database(self.conn)
+        aw._angka["hasil"] = None
+        self.assertEqual(angka["bisa"], 3)
+        self.assertEqual(angka["belum_gm"], 1)
+        self.assertEqual({s["nama"]: s["bisa"] for s in angka["sumber"]}, {"pgnmentor": 2, "twic": 1})
+        # sesudah partai terakhir dianalisis: bisa - belum = bisa -> 100%
+        pid = self.conn.execute("SELECT id FROM partai WHERE sumber='twic'").fetchone()[0]
+        self.conn.execute("INSERT INTO analisis(partai_id, engine, depth, profil, dianalisis_pada) "
+                          "VALUES (?,'sf',16,'hemat',?)", (pid, self.sekarang()))
+        self.conn.commit()
+        angka = aw.angka_database(self.conn)
+        aw._angka["hasil"] = None
+        self.assertEqual(angka["bisa"] - angka["belum_gm"] - angka["belum_saya"], angka["bisa"])
+
     def test_saringan_sumber_dan_cari(self):
         from app.analisa_web import daftar_pemain
         a = self.pemain("Carlsen, Magnus", "GM")
@@ -815,9 +844,12 @@ class HentikanBatchAntrean(unittest.TestCase):
         self.antrean = antrean
         self.tmp = tempfile.TemporaryDirectory()
         d = Path(self.tmp.name)
-        self.asli = (antrean.PATH_ANTREAN, tb.PATH_TUGAS, aw._hidup, aw._matikan)
+        self.asli = (antrean.PATH_ANTREAN, tb.PATH_TUGAS, aw._hidup, aw._matikan,
+                     aw.jejak_kendali.PATH_JEJAK)
         antrean.PATH_ANTREAN = d / "antrean.json"
         tb.PATH_TUGAS = d / "tugas.json"
+        # jangan menulis ke data/laporan/log-kendali-mesin.txt yang sungguhan
+        aw.jejak_kendali.PATH_JEJAK = d / "jejak.txt"
         aw._hidup = lambda pid, sejak=None: True
         self.dimatikan = []
         aw._matikan = lambda pid, **k: self.dimatikan.append(pid)
@@ -825,7 +857,8 @@ class HentikanBatchAntrean(unittest.TestCase):
         antrean.perbarui(k["id"], status="jalan", pid=4321)
 
     def tearDown(self):
-        (self.antrean.PATH_ANTREAN, tb.PATH_TUGAS, aw._hidup, aw._matikan) = self.asli
+        (self.antrean.PATH_ANTREAN, tb.PATH_TUGAS, aw._hidup, aw._matikan,
+         aw.jejak_kendali.PATH_JEJAK) = self.asli
         self.tmp.cleanup()
 
     def test_item_antrean_jadi_batal(self):

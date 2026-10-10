@@ -203,7 +203,11 @@ dan membangun indeks posisi untuk partai yang belum terindeks.
 
 - **Laptop tidak tidur saat dicolok listrik** (diubah 12 Sep 2026), supaya
   batch semalaman tidak terhenti. Layar tetap mati sendiri. Mengembalikan:
-  `powercfg /change standby-timeout-ac 20`.
+  `powercfg /change standby-timeout-ac 20`. Pada 10 Okt 2026 ternyata
+  bergeser jadi 2 jam (sebab tidak diketahui, mungkin pembaruan Windows) dan
+  dikembalikan ke tidak tidur. Cek kapan saja: `powercfg /query SCHEME_CURRENT
+  SUB_SLEEP STANDBYIDLE` → "Current AC Power Setting Index: 0x00000000" =
+  tidak tidur.
 - **Saat memakai baterai laptop tetap tidur setelah 3 menit**, dan analisis
   ikut berhenti sampai dibangunkan. Untuk batch panjang, colok listrik.
 - Log batch dan laporan ada di `data/laporan/`.

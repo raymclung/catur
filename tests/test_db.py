@@ -142,10 +142,29 @@ class UjiSkema(DasarDB):
         # (v7: diganti idx_posisi_fen_langkah). v6 + idx_partai_format.
         # v8: idx_partai_sumber diganti idx_partai_sumber_tanggal, jumlah tetap.
         # v9 + idx_latihan_jawaban_kunci. v12 + idx_partai_bisa_dipilih.
+        # v13 + idx_partai_tanggal_urut, idx_partai_sumber_tanggal_urut.
         n = self.conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
         ).fetchone()[0]
-        self.assertEqual(n, 12)
+        self.assertEqual(n, 14)
+
+    def test_urutan_daftar_partai_memakai_indeks_bukan_btree_sementara(self):
+        """10 Okt 2026: urutan REPLACE(tanggal,'?','0') tidak bisa memakai
+        indeks kolom biasa -> tiap halaman daftar mengurutkan ±275 ribu partai
+        (1,4-5 s). Tes ini gagal kalau ekspresi di repositori.py dan di indeks
+        v13 tidak lagi sama persis — SQLite tidak memberi tahu, ia diam-diam
+        kembali ke B-tree sementara."""
+        from app import repositori as r
+        for sumber in (None, "twic", "gm"):
+            for urut in ("terbaru", "terlama"):
+                where, params = r._syarat(None, sumber, None, None)
+                sql = (f"SELECT {r.KOLOM_DAFTAR} {r.DARI_DAFTAR} {where} "
+                       f"ORDER BY {r.URUTAN[urut]} LIMIT 25")
+                rencana = " | ".join(x[3] for x in self.conn.execute(
+                    "EXPLAIN QUERY PLAN " + sql, params))
+                with self.subTest(sumber=sumber, urut=urut):
+                    self.assertNotIn("TEMP B-TREE", rencana)
+                    self.assertIn("tanggal_urut", rencana)
 
     def test_tabel_analisis_ada_di_v2(self):
         nama = {r[0] for r in self.conn.execute(

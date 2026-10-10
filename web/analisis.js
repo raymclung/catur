@@ -10,7 +10,8 @@
    Engine dipanggil lewat GET /api/evaluasi (kontrak: SESI.md Permintaan API #4),
    atau — kalau Ray memilih "Engine: perangkat ini" (9 Okt 2026) — lewat
    web/engine-browser.js, Stockfish WASM di browser yang mengembalikan bentuk
-   JSON yang sama. Terus (aliran) hanya untuk engine laptop. */
+   JSON yang sama. Terus: engine laptop lewat aliran server, engine perangkat
+   lewat EngineBrowser.terus() (10 Okt 2026), dengan tampilan yang sama. */
 
 (function () {
   "use strict";
@@ -406,7 +407,6 @@
 
   function analisisTerus() {
     if (fenTerus !== null) { hentikanTerus(); statusEngine("Dihentikan."); return; }
-    if (engineBrowser()) return;
     var fen = fenSekarang();
     var masalah = alasanTidakSah(fen);
     if (masalah) { statusEngine("Tidak dievaluasi · " + masalah, true); return; }
@@ -430,6 +430,32 @@
                           "batas-waktu": (BATAS_TERUS >= 60 ? BATAS_TERUS / 60 + " menit" :
                                           BATAS_TERUS + " detik") + " habis",
                           "posisi-selesai": "posisi sudah selesai" };
+
+    /* Satu depth baru dari engine mana pun: tampilan yang sama. */
+    function garisTerus(isi) {
+      if (sinyal.aborted || fenSekarang() !== fen) return;
+      tampilkanHasil(isi, fen);
+      el.engineMeta.textContent += " · terus " + String(isi.detik).replace(".", ",") + " s";
+      statusEngine("Terus menganalisis · depth " + isi.depth + " · tekan Henti untuk berhenti");
+    }
+
+    if (engineBrowser()) {
+      EngineBrowser.terus(fen, { multipv: el.multipv.value, batasDetik: BATAS_TERUS,
+                                 signal: sinyal, padaGaris: garisTerus })
+        .then(function (akhir) {
+          if (sinyal.aborted || fenSekarang() !== fen) return;
+          if (akhir.alasan === "posisi-selesai") tampilkanHasil(akhir.hasil, fen);
+          statusEngine("Selesai: " + (alasanSelesai[akhir.alasan] || akhir.alasan) + ".");
+        })
+        .catch(function (e) {
+          if (e.name === "AbortError") return;
+          statusEngine(e.message, true);
+        })
+        .then(function () {
+          if (permintaan && permintaan.signal === sinyal) selesaiTerus();
+        });
+      return;
+    }
 
     fetch(u.toString(), { signal: sinyal }).then(function (r) {
       if (!r.ok) {
@@ -464,9 +490,7 @@
         try { isi = JSON.parse(data); } catch (e) { return; }
         if (sinyal.aborted || fenSekarang() !== fen) return;
         if (jenis === "garis") {
-          tampilkanHasil(isi, fen);
-          el.engineMeta.textContent += " · terus " + String(isi.detik).replace(".", ",") + " s";
-          statusEngine("Terus menganalisis · depth " + isi.depth + " · tekan Henti untuk berhenti");
+          garisTerus(isi);
         } else if (jenis === "selesai") {
           statusEngine("Selesai: " + (alasanSelesai[isi.alasan] || isi.alasan) + ".");
         } else if (jenis === "galat") {
@@ -665,13 +689,13 @@
 
   el.analisa.addEventListener("click", evaluasi);
   el.terus.addEventListener("click", analisisTerus);
-  /* Terus memakai aliran server; engine browser cukup Analisa/Otomatis. */
+  /* Ganti engine di tengah Terus: yang lama dihentikan, Terus ditekan lagi
+     untuk memakai engine yang baru. */
   function terapkanEngine() {
-    if (engineBrowser()) hentikanTerus();
-    el.terus.disabled = engineBrowser();
-    el.terus.title = engineBrowser()
-      ? "Terus hanya untuk Engine: laptop"
-      : "Analisis tanpa henti: engine berpikir makin dalam sampai dihentikan, posisi berubah, depth 30, atau 2 menit";
+    hentikanTerus();
+    el.terus.disabled = false;
+    el.terus.title = "Analisis tanpa henti: engine berpikir makin dalam sampai dihentikan, posisi berubah, " +
+      "depth 30, atau 2 menit" + (engineBrowser() ? " (di perangkat ini: satu inti, lebih lambat dari laptop)" : "");
   }
   el.engine.addEventListener("change", function () {
     try { localStorage.setItem(KUNCI_ENGINE, el.engine.value); } catch (e) { /* mode privat */ }

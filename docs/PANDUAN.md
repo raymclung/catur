@@ -102,7 +102,9 @@ Di papan analisis (`/analisis`), **Analisa** (`spasi`) mengevaluasi posisi
 ±1,5 detik; **Terus** menganalisis tanpa henti — depth naik dan garisnya
 diperbarui sampai kamu menekan **Henti**, posisinya berubah, depth 30, atau 2
 menit. Selama Terus berjalan, engine server dipegang aliran itu, jadi evaluasi
-di tab lain menjawab "engine sedang dipakai".
+di tab lain menjawab "engine sedang dipakai". Pilih **Engine: perangkat ini**
+untuk memakai Stockfish di browser (misalnya dari HP lewat tunnel); Analisa
+dan Terus sama-sama berjalan di sana dan tidak memakai engine laptop.
 
 ## Struktur
 

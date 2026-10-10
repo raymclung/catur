@@ -26,8 +26,9 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Papan analisis tanpa henti** — tombol Terus mengalirkan garis Stockfish
   (SSE) dengan depth yang terus naik; engine server tetap satu dan dilepas
   dalam ~0,1 detik begitu dihentikan atau posisinya berubah. Bisa juga memakai
-  engine di perangkat ini (Stockfish WASM di browser) dengan bentuk jawaban yang
-  sama dengan API server, jadi tampilan papan tidak tahu engine mana yang menjawab.
+  engine di perangkat ini (Stockfish WASM di browser), termasuk tombol Terus,
+  dengan bentuk jawaban yang sama dengan API server, jadi tampilan papan tidak
+  tahu engine mana yang menjawab.
 - **Antrean analisis** — batch Stockfish berjalan sebagai proses terpisah,
   dibatasi slot dan profil RAM supaya laptop tetap bisa dipakai; bisa dijeda
   dan dilanjutkan setelah komputer mati.
@@ -39,7 +40,9 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   yang paling sering kalah melawan lawan kuat (bisa disaring GM/IM saja), per
   warna, dengan tanda sampel kecil, dan di fase mana tiap kekalahan hilang
   (pembukaan / tengah / akhir / waktu). Tiap angka menaut langsung ke latihan:
-  soal pembukaan repertoire itu, atau blunder sendiri di fase itu saja.
+  soal pembukaan repertoire itu, atau blunder sendiri di fase itu saja. Tautan
+  repertoire ditentukan dari langkah partai, bukan tebakan kode ECO, jadi
+  transposisi (mis. Catalan lewat 1.c4) tetap sampai ke soal yang benar.
 - **Halaman pemain** — rating, skor sebagai Putih/Hitam, pembukaan per ECO.
 - **Tebak langkah GM** — main sebagai GM di partai aslinya; tiap langkah dinilai
   sama dengan GM, beda tapi tetap bagus menurut engine, atau meleset.
@@ -63,8 +66,14 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Batas arsitektur yang dijaga:** frontend hanya lewat `/api/...`, modul impor
   tidak tahu soal HTTP, `app/main.py` bebas SQL (dijaga tes arsitektur).
 - **Tanpa framework frontend dan tanpa CDN** — aplikasi jalan penuh tanpa internet.
-- **901 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
-  jaringan lokal dan tes halaman di peramban headless yang dijalankan CI.
+- **Jejak kendali mesin.** Menghentikan batch, menjeda, atau mematikan penjaga
+  antrean dicatat ke berkas yang hanya ditambah (asal permintaan, User-Agent,
+  alasan), terpisah dari log server, supaya "siapa yang menghentikan ini?"
+  selalu bisa dijawab.
+- **921 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+  jaringan lokal, tes halaman di peramban headless yang dijalankan CI, dan tes
+  engine WASM di peramban sungguhan lewat DevTools Protocol (dilewati di CI
+  karena berkas engine tidak masuk repo).
 
 ## Tech stack
 

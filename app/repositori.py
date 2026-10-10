@@ -67,8 +67,11 @@ DARI_DAFTAR = """
 # Tanggal PGN yang tidak diketahui ditulis '?' ("1996.??.??", 12.821 partai).
 # '?' lebih besar dari angka di ASCII, jadi dulu "1996.??.??" terurut DI ATAS
 # "1996.12.31" (audit 27 Sep 2026). Untuk URUTAN saja '?' dibaca '0' = awal
-# tahun/bulan; data tanggalnya tetap '??', tidak ditebak. Biayanya indeks
-# tanggal tidak dipakai untuk urutan: terukur <= 0,15 dtk pada 273 ribu partai.
+# tahun/bulan; data tanggalnya tetap '??', tidak ditebak. Sejak skema v13
+# urutan ini dilayani indeks ekspresi idx_partai_tanggal_urut dan
+# idx_partai_sumber_tanggal_urut (app/db.py). Dulu tanpa indeks: tiap halaman
+# daftar mengurutkan seluruh partai di B-tree sementara, 1,4-5 detik
+# (10 Okt 2026). Ekspresi di sini dan di indeks harus SAMA PERSIS.
 _TANGGAL_URUT = "REPLACE(g.tanggal, '?', '0')"
 
 URUTAN = {
@@ -109,7 +112,13 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
         # Partai GM = antar-MANUSIA, sama dengan penjelajah: Kasparov-Deep Blue
         # dan partai konsultasi (pemain.jenis) dulu ikut terhitung di sini.
         from .posisi import SUMBER_GM, SYARAT_ANTAR_MANUSIA
-        syarat.append(f"g.sumber IN ({','.join('?' * len(SUMBER_GM))})")
+        # `+` sengaja: partai GM = 95% seluruh partai, jadi lebih cepat
+        # menyusuri idx_partai_tanggal_urut lalu menyaring sumber daripada
+        # mengambil tiga rentang indeks sumber lalu mengurutkan 262 ribu
+        # baris di B-tree sementara (10 Okt 2026: 1,9 s -> 0,00 s, id
+        # halaman 1 dan 200 sama persis). `+` hanya mematikan indeks untuk
+        # kolom ini; hasilnya tidak berubah.
+        syarat.append(f"+g.sumber IN ({','.join('?' * len(SUMBER_GM))})")
         syarat.append(SYARAT_ANTAR_MANUSIA)
         params += list(SUMBER_GM)
     elif sumber:

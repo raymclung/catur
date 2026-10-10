@@ -16,6 +16,12 @@ if "%ADA%"=="1" (
 )
 
 echo Menyalakan server catur...
+rem Log server lama DIPINDAH, bukan ditimpa (10 Okt 2026): Start-Process
+rem -RedirectStandardOutput selalu menulis ulang berkasnya, jadi restart 15:57
+rem menghapus satu-satunya bukti siapa yang menghentikan dua batch 15:54.
+rem Disimpan 30 yang terbaru di data\laporan\server-lama\. Gagal memindah
+rem tidak boleh menghalangi server menyala, jadi semuanya di dalam try.
+powershell -NoProfile -Command "try { $d = 'data\laporan'; $a = Join-Path $d 'server-lama'; foreach ($n in 'log-server.txt','log-server-galat.txt') { $p = Join-Path $d $n; if ((Test-Path $p) -and (Get-Item $p).Length -gt 0) { New-Item -ItemType Directory -Force $a | Out-Null; Move-Item $p (Join-Path $a ((Get-Item $p).LastWriteTime.ToString('yyyyMMdd-HHmmss') + '-' + $n)) -Force } }; if (Test-Path $a) { Get-ChildItem $a -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 30 | Remove-Item -Force } } catch { '  log lama tidak bisa dipindah: ' + $_.Exception.Message }"
 powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath python -ArgumentList '-X','utf8','-m','uvicorn','app.main:aplikasi','--host','127.0.0.1','--port','8000' -WorkingDirectory '%CD%' -WindowStyle Hidden -RedirectStandardOutput 'data\laporan\log-server.txt' -RedirectStandardError 'data\laporan\log-server-galat.txt'"
 
 :tunggu

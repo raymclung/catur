@@ -36,12 +36,13 @@ FOLDER_DATA = PATH_DB.parent
 # Dinaikkan tiap kali skema berubah, supaya nanti bisa dideteksi kalau ada
 # database lama yang perlu dimigrasi. Disimpan lewat PRAGMA user_version
 # bawaan SQLite, jadi tidak perlu tabel tambahan.
-VERSI_SKEMA = 12  # v2 analisis; v3 sumber_impor; v4 posisi; v5 posisi_tersimpan;
+VERSI_SKEMA = 13  # v2 analisis; v3 sumber_impor; v4 posisi; v5 posisi_tersimpan;
                   # v6 akun_pribadi + format; v7 indeks penutup posisi;
                   # v8 indeks (sumber, tanggal) untuk daftar partai;
                   # v9 latihan_jawaban; v10 pemain.jenis (mesin/konsultasi);
                   # v11 CHECK akun_pribadi untuk database hasil migrasi (trigger);
-                  # v12 indeks penutup (sumber, hasil, jumlah_langkah) halaman Mesin
+                  # v12 indeks penutup (sumber, hasil, jumlah_langkah) halaman Mesin;
+                  # v13 indeks ekspresi REPLACE(tanggal) untuk urutan daftar partai
 
 
 SKEMA = """
@@ -167,6 +168,17 @@ CREATE INDEX IF NOT EXISTS idx_partai_sumber_tanggal ON partai(sumber, tanggal D
 -- dipilih & belum dianalisis) — baris partai memuat PGN, memindainya = membaca
 -- gigabyte hanya untuk menghitung.
 CREATE INDEX IF NOT EXISTS idx_partai_bisa_dipilih ON partai(sumber, hasil, jumlah_langkah);
+-- v13: urutan terbaru/terlama daftar partai memakai REPLACE(tanggal,'?','0')
+-- (tanggal "1996.??.??" dibaca awal tahun, lihat app/repositori.py), dan
+-- indeks kolom biasa tidak bisa dipakai untuk ekspresi itu: tiap halaman
+-- daftar mengurutkan ±275 ribu partai di B-tree sementara (10 Okt 2026:
+-- tanpa saringan 1,4 s hangat / 3-5 s dingin, sumber=gm 2,8 s). Ekspresinya
+-- harus SAMA PERSIS dengan _TANGGAL_URUT di repositori.py, kalau tidak
+-- SQLite diam-diam kembali ke B-tree sementara (dijaga tests/test_db.py).
+CREATE INDEX IF NOT EXISTS idx_partai_tanggal_urut
+    ON partai(REPLACE(tanggal, '?', '0'), id);
+CREATE INDEX IF NOT EXISTS idx_partai_sumber_tanggal_urut
+    ON partai(sumber, REPLACE(tanggal, '?', '0'), id);
 
 
 -- ================================================================ PHASE 2

@@ -320,6 +320,55 @@ class PembukaanKalah(Kumpulan):
         self.assertEqual(per[("putih", "English Opening")], "English")
         self.assertIsNone(per[("putih", "Ruy Lopez")])
 
+    def langkah(self, id_, uci, mulai=0):
+        """Baris indeks posisi untuk partai uji (fen_kunci tidak dipakai di sini)."""
+        for i, u in enumerate(uci, start=mulai):
+            self.conn.execute("INSERT INTO posisi(fen_kunci,partai_id,ply,langkah_uci,langkah_san) "
+                              "VALUES(?,?,?,?,?)", (f"f{id_}-{i}", id_, i, u, u))
+        self.conn.commit()
+
+    def kartu(self):
+        return {(p["warna"], p["keluarga"]): p
+                for p in pembukaan_kalah(self.conn, [1], lawan="gmim")["pembukaan"]}
+
+    def test_tautan_dari_langkah_bukan_eco(self):
+        """10 Okt 2026: kartu Hitam London/Colle 73% Ragozin menurut langkah,
+        Putih QGD 58% English (1.c4), tapi pemetaan ECO memberi tanpa tautan."""
+        self.main(1, 2, "1-0", "D02", saya_putih=False)
+        self.langkah(1, ["d2d4", "d7d5", "c1f4", "e7e6", "e2e3", "g8f6"])
+        self.main(2, 2, "1-0", "D37")
+        self.langkah(2, ["c2c4", "e7e6", "b1c3", "d7d5", "d2d4", "g8f6"])
+        k = self.kartu()
+        self.assertEqual(k[("hitam", "Queen's Pawn (London, Colle, dll.)")]["latihan"], "Ragozin / QGD")
+        self.assertEqual(k[("putih", "Queen's Gambit Declined")]["latihan"], "English")
+        self.assertEqual(k[("putih", "Queen's Gambit Declined")]["latihan_porsi"], 100)
+
+    def test_langkah_mengalahkan_tag_eco_yang_salah(self):
+        """Tag B90 tapi partainya 1.d4: bukan Sicilian."""
+        self.main(1, 2, "1-0", "B90", saya_putih=False)
+        self.langkah(1, ["d2d4", "g8f6", "c2c4", "g7g6"])
+        self.assertIsNone(self.kartu()[("hitam", "Sicilian Defense")]["latihan"])
+
+    def test_tautan_hanya_kalau_mayoritas(self):
+        self.main(1, 2, "1-0", "A00")
+        self.langkah(1, ["c2c4", "e7e5"])                 # English
+        self.main(2, 2, "1-0", "A00")
+        self.langkah(2, ["g2g3", "d7d5"])                 # bukan repertoire
+        self.main(3, 2, "1-0", "A00")
+        self.langkah(3, ["b2b3", "e7e5"])                 # bukan repertoire
+        p = self.kartu()[("putih", "Pembukaan tidak umum / flank")]
+        self.assertIsNone(p["latihan"])
+        self.assertEqual(p["latihan_porsi"], 33)
+        self.main(4, 2, "1-0", "A00")
+        self.langkah(4, ["c2c4", "c7c5"])                 # English: kini 2 dari 4 = separuh
+        self.assertEqual(self.kartu()[("putih", "Pembukaan tidak umum / flank")]["latihan"], "English")
+
+    def test_indeks_bolong_jatuh_ke_eco(self):
+        """Ply 0 hilang: langkahnya tidak dipercaya, pemetaan ECO dipakai."""
+        self.main(1, 2, "1-0", "B90", saya_putih=False)
+        self.langkah(1, ["c7c5", "g1f3"], mulai=1)
+        self.assertEqual(self.kartu()[("hitam", "Sicilian Defense")]["latihan"], "Sicilian")
+
     def test_kalah_di_dari_golongan(self):
         self.assertEqual(kalah_di({"sebab": "blunder", "ply": 10}), "pembukaan")
         self.assertEqual(kalah_di({"sebab": "missclick", "ply": 24}), "tengah")   # batas = FASE ringkasan
