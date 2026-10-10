@@ -1310,24 +1310,40 @@ karena membuat semua peringatan lain ikut diabaikan.
 
 ### Batas yang diketahui
 
-- **12–24 detik untuk pertanyaan baru** — itu batas model 7b di CPU laptop
-  ini. Diperbaiki 9 Okt 2026 (commit `afd0209`) sejauh yang bisa tanpa
+- **Waktu nyata (diukur 10 Okt 2026, Ollama sungguhan, `qwen2.5-coder:7b`,
+  RAM tersedia 4,2 GB, tanpa batch engine):** memanaskan model 8,5 s;
+  pertanyaan pertama sesudah model dimuat **53–55 s**; pertanyaan baru
+  berikutnya **5–22 s** (makin panjang SQL-nya, makin lama); pertanyaan yang
+  sama **0,03 s** (cache). SQL-nya sendiri ±0,5 s — hampir seluruh waktu ada
+  di LLM. Pertanyaan pertama lambat karena RAM tersedia (4,2 GB) lebih kecil
+  dari model (4,7 GB), jadi sebagian bobot model masih dibaca dari disk
+  walau sudah dipanaskan; menutup tab Chrome (±460 MB per tab) membantu.
+- **Batas model 7b di CPU laptop ini.** Diperbaiki 9 Okt 2026 (commit `afd0209`) sejauh yang bisa tanpa
   mengganti model: (1) skema untuk prompt di-cache 10 menit — `COUNT(*)`
   analisis_langkah makan 9,4 s saat cache disk dingin; (2) SQL di-cache per
   pertanyaan, jadi pertanyaan yang sama 0,05 s tanpa LLM, sedangkan hasilnya
   tetap dibaca ulang dari database; (3) `POST /api/tanya/panaskan` memuat
   model saat halaman dibuka, `keep_alive` 10 menit. Cache hilang kalau
-  server dimatikan. Waktu dengan Ollama sungguhan belum diukur ulang (RAM
-  bebas 2,8 GB saat itu, model butuh 4,7 GB).
+  server dimatikan.
 - **LLM bisa mengarang SQL yang salah secara logika**, bukan cuma sintaks.
   `peringatan_hasil()` menangkap tiga pola yang terbukti terjadi, tapi itu
   petunjuk, bukan jaminan: SQL salah yang tidak cocok pola apa pun tetap
   lolos tanpa ditandai. SQL-nya selalu ditampilkan supaya Ray bisa menilai
   sendiri. Pemeriksaan kebenaran logika sepenuhnya tidak bisa diotomatiskan.
+  Kasus nyata 10 Okt 2026: "pembukaan apa yang paling sering saya kalah"
+  dijawab dengan `akurasi_hitam > 0` sebagai "kalah", hanya partai Ray
+  sebagai Putih, dan baris teratasnya pembukaan NULL (825) — angka rapi,
+  jawaban salah, tanpa peringatan. Ditambal tiga cara: prompt kini
+  menjelaskan kalah/menang = `hasil` + warna akun (dengan contoh SQL), dua
+  peringatan baru (soal kalah/menang tanpa kolom `hasil`; baris teratas
+  NULL). Sesudahnya SQL-nya benar (Sicilian Open 147, Old Sicilian 129, …).
+  Tambalan prompt seperti ini hanya menolong pertanyaan yang mirip.
 - **Kalimat jawaban dari templat, bukan LLM** (`kalimat_jawaban`, 9 Okt
   2026). Angka disalin apa adanya dari baris, jadi kalimat dan tabel tidak
   bisa berbeda. Batasnya: kalimatnya kaku, memakai alias kolom dari SQL, dan
-  "baris pertama" mengikuti urutan SQL — bukan berarti "teratas".
+  "baris pertama" mengikuti urutan SQL — bukan berarti "teratas". Kolom
+  `id`/`*_id` tidak dibacakan (10 Okt: "7.439 (nama Nakamura…" menyesatkan),
+  tapi tetap ada di tabel.
 - (Butir lama "`tanya_db.py` memuat SQL, penyimpangan belum disetujui" sudah
   gugur: sejak 21 Sep `CLAUDE.md` bagian 4 mengizinkan modul fitur punya
   kuerinya sendiri; yang dilarang hanya SQL di `app/main.py`.)

@@ -81,6 +81,32 @@
 
   var mode = "kesalahan";
   var ringkasanPembukaan = null;
+  /* ?pembukaan=Sicilian: soal pembukaan untuk satu repertoire saja (tautan
+     "latih ->" dari kartu pembukaan halaman Kekalahan, 10 Okt 2026). Nilainya
+     nama `pembukaan` di soal server; dibuang begitu Ray mengganti mode. */
+  var saringPembukaan = new URLSearchParams(window.location.search).get("pembukaan") || null;
+
+  /* Saringan mode kesalahan dari kolom "Kalah di" halaman Kekalahan (10 Okt
+     2026): ?eco_dari=B20&eco_sampai=B99&warna=hitam&fase=tengah&nama=... —
+     hanya kesalahan di fase itu, di partai keluarga ECO itu, dengan warna itu.
+     Batas fase SAMA dengan app/ringkasan.py FASE (ply 0-24 / 24-80 / 80+). */
+  var saringKesalahan = (function () {
+    var q = new URLSearchParams(window.location.search);
+    var s = {
+      eco_dari: /^[A-E]\d\d$/.test(q.get("eco_dari") || "") ? q.get("eco_dari") : null,
+      eco_sampai: /^[A-E]\d\d$/.test(q.get("eco_sampai") || "") ? q.get("eco_sampai") : null,
+      warna: /^(putih|hitam)$/.test(q.get("warna") || "") ? q.get("warna") : null,
+      fase: /^(pembukaan|tengah|akhir)$/.test(q.get("fase") || "") ? q.get("fase") : null,
+      nama: q.get("nama") || null
+    };
+    if (!(s.eco_dari && s.eco_sampai)) { s.eco_dari = s.eco_sampai = null; }
+    return (s.eco_dari || s.warna || s.fase) ? s : null;
+  })();
+  var FASE_PLY = [["pembukaan", 0, 24], ["tengah", 24, 80], ["akhir", 80, Infinity]];
+  function faseDariPly(ply) {
+    for (var i = 0; i < FASE_PLY.length; i++) if (ply >= FASE_PLY[i][1] && ply < FASE_PLY[i][2]) return FASE_PLY[i][0];
+    return "akhir";
+  }
 
   /* Hanya soal yang boleh dikerjakan yang masuk antrean: yang sudah benar
      dibuang, yang salah menunggu JEDA_ULANG_HARI. */
@@ -101,6 +127,14 @@
         + "Longgarkan saringan di atas: coba \"semua lawan\", format lain, atau akun lain.";
     }
     return "Tidak ada kesalahan jenis ini " + tempat + ".";
+  }
+
+  function teksSaringKesalahan() {
+    var s = saringKesalahan, bagian = [];
+    if (s.nama || s.eco_dari) bagian.push(s.nama || (s.eco_dari + "–" + s.eco_sampai));
+    if (s.warna) bagian.push(s.warna === "putih" ? "Putih" : "Hitam");
+    if (s.fase) bagian.push("fase " + s.fase);
+    return bagian.join(" · ");
   }
 
   function hitungTunda() { return Catatan.hitung(soalSemua); }
@@ -196,6 +230,10 @@
   function partaiAkun(id, batas) {
     var q = "/api/partai?pemain_id=" + id + "&dianalisis=true&per_halaman=100&urut=terbaru";
     if (el.format.value !== "semua") q += "&format=" + el.format.value;
+    if (saringKesalahan && saringKesalahan.eco_dari) {
+      q += "&eco_dari=" + saringKesalahan.eco_dari + "&eco_sampai=" + saringKesalahan.eco_sampai;
+    }
+    if (saringKesalahan && saringKesalahan.warna) q += "&warna=" + saringKesalahan.warna;
     return ambil(q).then(function (d) {
       return d.partai.map(function (g) { return { g: g, warna: g.putih_id === id ? "putih" : "hitam" }; })
         .filter(function (x) { return lolosLawan(x.g, x.warna); })
@@ -208,6 +246,7 @@
     a.langkah.forEach(function (l) {
       if (warnaDiambil && l.warna !== warnaDiambil) return;
       if (jenis.indexOf(l.klasifikasi) < 0) return;
+      if (saringKesalahan && saringKesalahan.fase && faseDariPly(l.ply) !== saringKesalahan.fase) return;
       if (!l.langkah_terbaik_uci || l.langkah_terbaik_uci === l.uci) return;
       if (l.eval_sebelum_cp !== null && l.eval_sebelum_cp !== undefined &&
           l.eval_sebelum_cp < BATAS_MIN_SKOR) {
@@ -295,7 +334,10 @@
       });
       return rantai;
     }).then(function () {
-      if (!soalSemua.length) throw new Error(kosong("di partai yang sudah dianalisis"));
+      if (!soalSemua.length) {
+        throw new Error(kosong(saringKesalahan ? "untuk saringan " + teksSaringKesalahan()
+          : "di partai yang sudah dianalisis"));
+      }
       urutan = susunUrutan();
       el.status.textContent = "";
       berikutnya();
@@ -308,7 +350,15 @@
     el.status.textContent = "menghitung posisi pembukaan… (pertama kali ±10 detik)";
     return LatihanPembukaan.muat().then(function (d) {
       ringkasanPembukaan = d.ringkasan;
-      d.soal.forEach(function (s) { soalSemua.push(s); });
+      d.soal.forEach(function (s) {
+        if (!saringPembukaan || s.pembukaan === saringPembukaan) soalSemua.push(s);
+      });
+      if (!soalSemua.length && saringPembukaan) {
+        var n = (ringkasanPembukaan.per_pembukaan || {})[saringPembukaan] || 0;
+        throw new Error("Tidak ada soal pembukaan " + saringPembukaan + ": di " + n +
+          " partai " + saringPembukaan + ", tidak ada posisi tempat langkahmu berulang kali jarang " +
+          "dimainkan GM. Kekalahannya kemungkinan terjadi sesudah pembukaan — lihat halaman Kelemahan.");
+      }
       if (!soalSemua.length) {
         throw new Error("Tidak ada soal pembukaan: di " + (ringkasanPembukaan.partai_repertoire || 0) +
           " partai repertoire, tidak ada posisi tempat langkahmu berulang kali jarang dimainkan GM.");
@@ -405,6 +455,26 @@
     if (t.pilihan) angka(t.pilihan, "pilihan sendiri");
     if (mode === "pembukaan" && ringkasanPembukaan) {
       angka((ringkasanPembukaan.partai_repertoire || 0).toLocaleString("id-ID"), "partai repertoire");
+    }
+    if (mode !== "pembukaan" && saringKesalahan) {
+      var sk = buat("span", null, "");
+      sk.appendChild(buat("strong", null, teksSaringKesalahan()));
+      sk.appendChild(teks(" saja · "));
+      var hapus = document.createElement("a");
+      hapus.href = "/static/latihan.html";
+      hapus.appendChild(teks("hapus saringan"));
+      sk.appendChild(hapus);
+      el.skor.appendChild(sk);
+    }
+    if (mode === "pembukaan" && saringPembukaan) {
+      var saring = buat("span", null, "");
+      saring.appendChild(buat("strong", null, saringPembukaan));
+      saring.appendChild(teks(" saja · "));
+      var semua = document.createElement("a");
+      semua.href = "/static/latihan.html?mode=pembukaan";
+      semua.appendChild(teks("semua pembukaan"));
+      saring.appendChild(semua);
+      el.skor.appendChild(saring);
     }
     var lewat = [];
     if (dilewatiKalah) lewat.push(dilewatiKalah + " karena skor engine < " + ambangTampil());
@@ -693,6 +763,8 @@
   });
   el.mode.addEventListener("change", function () {
     mode = el.mode.value;
+    saringPembukaan = null;
+    saringKesalahan = null;
     el.galat.hidden = true;
     /* Saringan akun/lawan/format/jenis hanya berlaku untuk soal kesalahan. */
     ["akun", "lawan", "format", "jenis"].forEach(function (k) {
@@ -703,6 +775,7 @@
     try {
       var u = new URL(window.location.href);
       if (mode === "pembukaan") u.searchParams.set("mode", "pembukaan"); else u.searchParams.delete("mode");
+      ["pembukaan", "eco_dari", "eco_sampai", "warna", "fase", "nama"].forEach(function (k) { u.searchParams.delete(k); });
       window.history.replaceState(null, "", u);
     } catch (e) { /* URL tidak bisa diubah: tidak apa-apa */ }
     tampilkanPerkembangan();
@@ -758,6 +831,7 @@
       adaSaringanUrl = true;
     }
   });
+  if (saringKesalahan) adaSaringanUrl = true;
   function munculkanSaringan() {
     ["akun", "lawan", "format", "jenis"].forEach(function (k) {
       var lab = el[k].closest("label");

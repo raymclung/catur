@@ -37,7 +37,9 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   dicari sebabnya (habis waktu, miss-click, atau blunder sungguhan), dipisah
   per format bullet/blitz/rapid/klasik. Halaman yang sama merangkum pembukaan
   yang paling sering kalah melawan lawan kuat (bisa disaring GM/IM saja), per
-  warna, dengan tanda sampel kecil.
+  warna, dengan tanda sampel kecil, dan di fase mana tiap kekalahan hilang
+  (pembukaan / tengah / akhir / waktu). Tiap angka menaut langsung ke latihan:
+  soal pembukaan repertoire itu, atau blunder sendiri di fase itu saja.
 - **Halaman pemain** — rating, skor sebagai Putih/Hitam, pembukaan per ECO.
 - **Tebak langkah GM** — main sebagai GM di partai aslinya; tiap langkah dinilai
   sama dengan GM, beda tapi tetap bagus menurut engine, atau meleset.
@@ -61,7 +63,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Batas arsitektur yang dijaga:** frontend hanya lewat `/api/...`, modul impor
   tidak tahu soal HTTP, `app/main.py` bebas SQL (dijaga tes arsitektur).
 - **Tanpa framework frontend dan tanpa CDN** — aplikasi jalan penuh tanpa internet.
-- **890 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+- **901 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
   jaringan lokal dan tes halaman di peramban headless yang dijalankan CI.
 
 ## Tech stack

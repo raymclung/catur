@@ -34,7 +34,9 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .analisis_db import mat_dari_sudut_pemain
 from .db import koneksi
-from .eco import keluarga_eco
+from .eco import KELUARGA, keluarga_eco
+from .ringkasan import FASE
+from .latihan_pembukaan import CATALAN, ENGLISH, RAGOZIN, SICILIAN
 
 router = APIRouter(prefix="/api", tags=["kekalahan"])
 
@@ -50,6 +52,18 @@ POLA_CLK = re.compile(r"\{[^}]*%clk\s+(\d+):(\d\d):(\d\d(?:\.\d+)?)[^}]*\}")
 LAWAN_VALID = ("ketentuan", "2200", "gelar", "gmim", "semua")
 GELAR_GMIM = ("GM", "IM")
 SAMPEL_KECIL = 5        # di bawah ini satu-dua partai sudah membalik persentasenya
+
+# Baris kartu pembukaan -> nama repertoire di soal latihan pembukaan, supaya
+# halaman Kekalahan bisa menaut "latih ->" (Ray, 10 Okt 2026). Kunci = warna
+# Ray x keluarga ECO (eco.py). Latihan menggolongkan dari langkah, bukan ECO,
+# jadi pemetaan ini perkiraan: baris yang tidak ada di sini tidak diberi tautan.
+LATIHAN_REPERTOIRE = {
+    ("putih", "English Opening"): ENGLISH,
+    ("putih", "Catalan Opening"): CATALAN,
+    ("hitam", "Sicilian Defense"): SICILIAN,
+    ("hitam", "Ragozin Defense"): RAGOZIN,
+    ("hitam", "Queen's Gambit Declined"): RAGOZIN,
+}
 SEBAB_URUT = ("waktu", "missclick", "blunder", "dikalahkan", "belum")
 
 
@@ -253,6 +267,50 @@ def _syarat_lawan(mode: str, tanda: str) -> str:
     return {"semua": "", "gelar": gelar, "2200": kuat, "gmim": gmim}.get(mode, f"({gelar} OR {kuat})")
 
 
+POTONGAN_ID = 900      # id per kueri IN (...): di bawah batas variabel SQLite lama (999)
+
+
+def _langkah_per_partai(conn: sqlite3.Connection, ids: list[int]) -> dict[int, list[dict]]:
+    """Baris analisis_langkah per partai, urut ply. Dipotong supaya ribuan id aman."""
+    per_partai: dict[int, list[dict]] = {}
+    for i in range(0, len(ids), POTONGAN_ID):
+        potong = ids[i:i + POTONGAN_ID]
+        q = f"""SELECT partai_id, ply, nomor_langkah, warna, san, kehilangan_cp, klasifikasi,
+                       eval_sebelum_cp, eval_sesudah_cp, mat_sesudah, langkah_terbaik_san
+                FROM analisis_langkah WHERE partai_id IN ({",".join("?" * len(potong))})
+                ORDER BY partai_id, ply"""
+        for l in conn.execute(q, potong):
+            per_partai.setdefault(l["partai_id"], []).append(dict(l))
+    return per_partai
+
+
+def fase_ply(ply: int) -> str:
+    """Nama fase untuk satu ply, dengan batas yang sama dengan halaman Ringkasan."""
+    for nama, awal, akhir in FASE:
+        if awal <= ply < akhir:
+            return nama
+    return FASE[-1][0]
+
+
+# Nama keluarga ECO -> [kode_awal, kode_akhir] (eco.KELUARGA).
+RENTANG_KELUARGA = {nama: [awal, akhir] for awal, akhir, nama in KELUARGA}
+
+# Urutan tampil kolom "Kalah di": fase dulu (yang bisa dilatih), lalu sisanya.
+KALAH_DI = ("pembukaan", "tengah", "akhir", "waktu", "dikalahkan", "belum")
+
+
+def kalah_di(gol: dict) -> str:
+    """
+    Satu hasil golongkan() -> tempat partai itu hilang.
+
+    Blunder dan missclick punya ply penentu, jadi dipetakan ke fasenya; kalah
+    waktu, dikalahkan perlahan, dan belum dianalisis tidak punya satu momen.
+    """
+    if gol["sebab"] in ("blunder", "missclick") and gol.get("ply") is not None:
+        return fase_ply(gol["ply"])
+    return {"waktu": "waktu", "dikalahkan": "dikalahkan"}.get(gol["sebab"], "belum")
+
+
 def kekalahan(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | None = None,
               lawan: str = "ketentuan", batas: int = 80) -> dict:
     """Partai kalah pemain-pemain itu, sudah digolongkan sebabnya."""
@@ -288,15 +346,7 @@ def kekalahan(conn: sqlite3.Connection, pemain_ids: list[int], format_: str | No
 
     dipakai = conn.execute(sql, params).fetchall()
 
-    # langkah analisis untuk partai-partai itu, sekali jalan
-    per_partai: dict[int, list[dict]] = {}
-    if dipakai:
-        tanda_id = ",".join("?" * len(dipakai))
-        q = f"""SELECT partai_id, ply, nomor_langkah, warna, san, kehilangan_cp, klasifikasi,
-                       eval_sebelum_cp, eval_sesudah_cp, mat_sesudah, langkah_terbaik_san
-                FROM analisis_langkah WHERE partai_id IN ({tanda_id}) ORDER BY ply"""
-        for l in conn.execute(q, [r["id"] for r in dipakai]):
-            per_partai.setdefault(l["partai_id"], []).append(dict(l))
+    per_partai = _langkah_per_partai(conn, [r["id"] for r in dipakai])
 
     keluar, ikhtisar, zeitnot = [], {s: 0 for s in SEBAB_URUT}, 0
     for r in dipakai:
@@ -357,6 +407,7 @@ def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: st
     sql += " ORDER BY g.tanggal DESC, g.id DESC"
 
     kel: dict[tuple, dict] = {}
+    kalah_ke: dict[int, tuple] = {}     # id partai kalah -> (warna Ray, kunci baris)
     total = {"partai": 0, "menang": 0, "remis": 0, "kalah": 0}
     for r in conn.execute(sql, params):
         warna = r["warna_saya"]
@@ -378,6 +429,26 @@ def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: st
         # urutan SQL terbaru dulu, jadi kekalahan pertama yang ditemui = terakhir
         if hasil == "kalah" and d["kalah_terakhir"] is None:
             d["kalah_terakhir"] = {"id": r["id"], "tanggal": r["tanggal"]}
+        if hasil == "kalah":
+            kalah_ke[r["id"]] = (warna, (warna, keluarga))
+
+    # Di mana tiap kekalahan hilang (Ray, 10 Okt 2026: "di fase mana kalah
+    # dalam Sicilian/English") — penggolong yang SAMA dengan daftar kalah,
+    # supaya angka kartu ini dan tabel di bawahnya tidak pernah berselisih.
+    for d in kel.values():
+        d["kalah_di"] = {k: 0 for k in KALAH_DI}
+    ids = list(kalah_ke)
+    langkah = _langkah_per_partai(conn, ids)
+    for i in range(0, len(ids), POTONGAN_ID):
+        potong = ids[i:i + POTONGAN_ID]
+        q = f"""SELECT g.id, g.pgn, g.kontrol_waktu, (a.partai_id IS NOT NULL) AS dianalisis
+                FROM partai g LEFT JOIN analisis a ON a.partai_id = g.id
+                WHERE g.id IN ({",".join("?" * len(potong))})"""
+        for r in conn.execute(q, potong):
+            warna, kunci = kalah_ke[r["id"]]
+            milik = [l for l in langkah.get(r["id"], []) if l["warna"] == warna]
+            gol = golongkan(r["pgn"] or "", r["kontrol_waktu"], warna, milik, bool(r["dianalisis"]))
+            kel[kunci]["kalah_di"][kalah_di(gol)] += 1
 
     keluar = []
     for d in kel.values():
@@ -388,6 +459,11 @@ def pembukaan_kalah(conn: sqlite3.Connection, pemain_ids: list[int], format_: st
             "kalah_persen": round(100 * d["kalah"] / d["partai"], 1),
             "sampel_kecil": d["partai"] < SAMPEL_KECIL,
             "contoh_nama": [n for n, _ in nama[:2]],
+            "latihan": LATIHAN_REPERTOIRE.get((d["warna"], d["keluarga"])),
+            # Rentang ECO keluarga ini, untuk menaut ke Latihan mode kesalahan
+            # (/api/partai?eco_dari=&eco_sampai=). Kelompok cadangan "Bxx" /
+            # "Tanpa ECO" tidak punya rentang, jadi tidak bertaut.
+            "eco_rentang": RENTANG_KELUARGA.get(d["keluarga"]),
         })
     # Paling sering kalah dulu; seri jumlah kalah -> persentase kalah lebih tinggi.
     keluar.sort(key=lambda x: (-x["kalah"], -x["kalah_persen"], x["keluarga"]))

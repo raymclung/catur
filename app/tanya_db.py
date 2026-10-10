@@ -202,6 +202,17 @@ Keterangan kolom yang mudah disalahpahami:
   'lichess-broadcast', atau 'file'
 - pemain.gelar berisi 'GM', 'IM', 'FM', dan sejenisnya; boleh NULL
 - pemain.akun_pribadi = 1 untuk akun Ray sendiri
+- **"saya kalah/menang" dihitung dari partai.hasil dan warna akun Ray, BUKAN
+  dari akurasi.** Ray kalah = (putih akun Ray AND hasil = '0-1') OR (hitam akun
+  Ray AND hasil = '1-0'); menang kebalikannya. Ray bisa bermain putih ATAU
+  hitam, jadi JOIN pemain dua kali (pw untuk putih_id, pb untuk hitam_id).
+  Contoh "pembukaan yang paling sering saya kalah":
+  SELECT g.pembukaan, COUNT(*) AS jumlah_kalah FROM partai g
+  JOIN pemain pw ON pw.id = g.putih_id JOIN pemain pb ON pb.id = g.hitam_id
+  WHERE g.pembukaan IS NOT NULL AND ((pw.akun_pribadi = 1 AND g.hasil = '0-1')
+     OR (pb.akun_pribadi = 1 AND g.hasil = '1-0'))
+  GROUP BY g.pembukaan ORDER BY jumlah_kalah DESC LIMIT 10
+- partai.pembukaan boleh NULL; buang NULL kalau mengelompokkan per pembukaan
 - analisis_langkah.klasifikasi berisi 'blunder', 'mistake', 'inaccuracy',
   atau NULL untuk langkah biasa
 
@@ -354,7 +365,7 @@ def tanya(pertanyaan: str, *, model: str = MODEL_BAWAAN, host: str = HOST_OLLAMA
         "jumlah": len(baris),
         "terpotong": terpotong,
         "model": model,
-        "peringatan": peringatan_hasil(sql, baris),
+        "peringatan": peringatan_hasil(sql, baris, pertanyaan),
         "kalimat": kalimat_jawaban(kolom, baris, terpotong),
         "dari_cache": dari_cache,
         "durasi_ms": int((time.monotonic() - mulai) * 1000),
@@ -381,6 +392,11 @@ def _nilai_teks(nilai) -> str:
     return str(nilai)
 
 
+def _kolom_id(kolom: str) -> bool:
+    k = kolom.lower()
+    return k == "id" or k.endswith("_id")
+
+
 def _nama_kolom(kolom: str) -> str:
     return kolom.replace("_", " ").strip()
 
@@ -400,6 +416,13 @@ def kalimat_jawaban(kolom: list[str], baris: list[list],
     """
     if not baris or not kolom:
         return None
+    # Kolom id hanya kunci teknis; dibacakan sebagai angka ("7.439 (nama
+    # Nakamura…") malah menyesatkan (uji Ollama sungguhan, 10 Okt 2026).
+    # Tetap ada di tabel di bawah kalimat.
+    pakai = [i for i, k in enumerate(kolom) if not _kolom_id(k)] or list(range(len(kolom)))
+    if len(pakai) < len(kolom):
+        kolom = [kolom[i] for i in pakai]
+        baris = [[r[i] for i in pakai] for r in baris]
     if len(baris) == 1:
         r = baris[0]
         if len(kolom) == 1:
@@ -421,7 +444,7 @@ def kalimat_jawaban(kolom: list[str], baris: list[list],
     return f"{jumlah} baris. {contoh} baris pertama (urutan dari SQL): {awal}."
 
 
-def peringatan_hasil(sql: str, baris: list) -> list[str]:
+def peringatan_hasil(sql: str, baris: list, pertanyaan: str = "") -> list[str]:
     """Pola SQL yang jalan tanpa error tapi jawabannya menyesatkan.
 
     Diperlukan karena kesalahan LLM yang paling berbahaya bukan yang bikin
@@ -466,4 +489,19 @@ def peringatan_hasil(sql: str, baris: list) -> list[str]:
                 "Keduanya tidak berhubungan; hasilnya tidak berarti."
             )
             break
+    # Dua pola dari uji Ollama sungguhan 10 Okt 2026: "pembukaan apa yang
+    # paling sering saya kalah" dijawab dengan `akurasi_hitam > 0` (bukan
+    # hasil partai) dan baris teratasnya pembukaan NULL — angka rapi, salah.
+    tanya = (pertanyaan or "").lower()
+    if re.search(r"\b(kalah|menang|seri|remis)", tanya) and "hasil" not in padat:
+        pesan.append(
+            "Pertanyaannya soal kalah/menang, tapi SQL tidak memakai kolom "
+            "partai.hasil. Kalah/menang hanya bisa dihitung dari hasil partai "
+            "(dan warna pemainnya), bukan dari akurasi."
+        )
+    if baris and baris[0] and baris[0][0] is None:
+        pesan.append(
+            "Baris teratas berisi nilai kosong (NULL). Biasanya itu partai yang "
+            "datanya tidak tercatat, bukan jawaban sebenarnya."
+        )
     return pesan
