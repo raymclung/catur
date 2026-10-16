@@ -89,7 +89,8 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
             eco_sampai: str | None = None,
             fen_kunci: str | None = None,
             format_: str | None = None,
-            dasar_gm: bool = False) -> tuple[str, list]:
+            dasar_gm: bool = False,
+            untuk_hitung: bool = False) -> tuple[str, list]:
     """
     Bangun bagian WHERE beserta parameternya.
 
@@ -132,8 +133,21 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
         params.append(sumber)
 
     if eco:
-        syarat.append("g.eco LIKE ? ESCAPE '\\'")
-        params.append(pola_like(eco.strip().upper(), awal=False))
+        # Awalan ECO sebagai RENTANG, bukan LIKE: LIKE di SQLite tidak bisa
+        # memakai indeks biasa, jadi gm + eco memindai semua partai GM (0,3 s,
+        # 16 Okt 2026). Rentang ini sama persis dengan LIKE 'B9%' hanya karena
+        # ECO dijamin huruf besar oleh database (trigger v14) — diukur juga:
+        # 555 awalan di data asli, hitungan identik. U+10FFFF = batas atas
+        # semua karakter, jadi tidak ada kode berawalan `awal` yang terlewat.
+        #
+        # Untuk DAFTAR indeksnya sengaja dimatikan (`+`): dengan indeks ECO,
+        # awalan lebar seperti 'B' (62 ribu partai) diambil semua lalu
+        # diurutkan — 0,05 -> 1,6 s (diukur). Menyusuri indeks tanggal dan
+        # berhenti di 25 baris tetap lebih cepat. Untuk COUNT indeksnya dipakai.
+        awal = eco.strip().upper()
+        kolom = "g.eco" if untuk_hitung else "+g.eco"
+        syarat.append(f"{kolom} >= ? AND {kolom} < ?")
+        params += [awal, awal + "\U0010ffff"]
 
     if hasil == "menang-kalah":
         # Keputusan Ray (SESI.md bagian 6): remis TIDAK dihapus dari database,
@@ -270,17 +284,22 @@ def cari_partai(
                             pemain_id, warna, eco_dari, eco_sampai, fen_kunci, format_)
     urutan = URUTAN.get(urut, URUTAN["terbaru"])
 
+    # WHERE untuk COUNT boleh beda bentuk dari WHERE daftar (indeks ECO
+    # dipakai), tapi memilih partai yang SAMA — dijaga tests/test_repositori.py.
+    w_hitung, p_hitung = _syarat(cari, sumber, eco, hasil, gelar, dianalisis, pemain_id,
+                                 warna, eco_dari, eco_sampai, fen_kunci, format_,
+                                 untuk_hitung=True)
     if _butuh_join(cari, gelar, dianalisis):
-        total = conn.execute(f"SELECT COUNT(*) {DARI_DAFTAR} {where}", params).fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) {DARI_DAFTAR} {w_hitung}", p_hitung).fetchone()[0]
     elif sumber == "gm" and not fen_kunci:
         # Dengan fen, subkueri posisi ikut dihitung dua kali di bentuk selisih
         # dan malah lebih lambat (0,41 -> 0,59 s); bentuk lama dipakai.
         dasar, p_dasar = _syarat(cari, sumber, eco, hasil, gelar, dianalisis, pemain_id,
                                  warna, eco_dari, eco_sampai, fen_kunci, format_,
-                                 dasar_gm=True)
+                                 dasar_gm=True, untuk_hitung=True)
         total = _total_gm(conn, dasar, p_dasar)
     else:
-        total = conn.execute(f"SELECT COUNT(*) FROM partai g {where}", params).fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) FROM partai g {w_hitung}", p_hitung).fetchone()[0]
 
     per_halaman = max(1, min(per_halaman, 100))
     halaman = max(1, halaman)

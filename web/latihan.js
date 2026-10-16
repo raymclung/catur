@@ -74,7 +74,10 @@
   function bacaProgres() { return Catatan.baca(); }
   function kunciSoal(s) { return Catatan.kunciSoal(s); }
   function alasanTunda(p, s) { return Catatan.alasanTunda(p, s); }
-  function tampilkanPerkembangan() { return Catatan.gambarPerkembangan(el.perkembangan, mode); }
+  /* Server dan kartu Perkembangan hanya kenal "kesalahan" dan "pembukaan";
+     soal "hukum" disimpan sebagai kesalahan (kuncinya berawalan hukum:). */
+  function modeCatatan() { return mode === "pembukaan" ? "pembukaan" : "kesalahan"; }
+  function tampilkanPerkembangan() { return Catatan.gambarPerkembangan(el.perkembangan, modeCatatan()); }
   function muatCatatan() { return Catatan.muat(galat); }
   /* hasil: "benar" | "salah" | "menyerah" | "pilihan" */
   function ingatHasil(s, hasil, uci) { return Catatan.ingat(s, hasil, uci, tampilkanPerkembangan); }
@@ -100,10 +103,15 @@
       /* ?motif=garpu dari kartu "Pola taktik" halaman Kelemahan (16 Okt 2026):
          hanya kesalahan yang motif utamanya itu (field `motif` dari server). */
       motif: /^[a-z_]+$/.test(q.get("motif") || "") ? q.get("motif") : null,
+      /* ?fen=&ply_dari= dari rincian halaman vs GM (16 Okt 2026): hanya partai
+         yang pernah mencapai posisi itu (/api/partai?fen=), dan hanya
+         kesalahan sesudahnya — "di mana aku salah setelah keluar buku". */
+      fen: (q.get("fen") || "").split(" ").length >= 4 ? q.get("fen") : null,
+      ply_dari: /^\d{1,3}$/.test(q.get("ply_dari") || "") ? parseInt(q.get("ply_dari"), 10) : null,
       nama: q.get("nama") || null
     };
     if (!(s.eco_dari && s.eco_sampai)) { s.eco_dari = s.eco_sampai = null; }
-    return (s.eco_dari || s.warna || s.fase || s.motif) ? s : null;
+    return (s.eco_dari || s.warna || s.fase || s.motif || s.fen) ? s : null;
   })();
   var FASE_PLY = [["pembukaan", 0, 24], ["tengah", 24, 80], ["akhir", 80, Infinity]];
   function faseDariPly(ply) {
@@ -135,6 +143,7 @@
   function teksSaringKesalahan() {
     var s = saringKesalahan, bagian = [];
     if (s.nama || s.eco_dari) bagian.push(s.nama || (s.eco_dari + "–" + s.eco_sampai));
+    else if (s.fen) bagian.push("posisi " + s.fen.split(" ")[0]);
     if (s.warna) bagian.push(s.warna === "putih" ? "Putih" : "Hitam");
     if (s.fase) bagian.push("fase " + s.fase);
     if (s.motif) bagian.push("pola " + (s.motifNama || s.motif.replace(/_/g, " ")));
@@ -245,6 +254,7 @@
       q += "&eco_dari=" + saringKesalahan.eco_dari + "&eco_sampai=" + saringKesalahan.eco_sampai;
     }
     if (saringKesalahan && saringKesalahan.warna) q += "&warna=" + saringKesalahan.warna;
+    if (saringKesalahan && saringKesalahan.fen) q += "&fen=" + encodeURIComponent(saringKesalahan.fen);
     var hasil = [];
     function halaman(n) {
       return ambil(q + "&halaman=" + n).then(function (d) {
@@ -263,10 +273,11 @@
 
   /* Soal dari satu partai + analisisnya. warnaDiambil null = kedua warna. */
   function tambahSoal(g, a, warnaDiambil, jenis) {
-    a.langkah.forEach(function (l) {
+    a.langkah.forEach(function (l, i) {
       if (warnaDiambil && l.warna !== warnaDiambil) return;
       if (jenis.indexOf(l.klasifikasi) < 0) return;
       if (saringKesalahan && saringKesalahan.fase && faseDariPly(l.ply) !== saringKesalahan.fase) return;
+      if (saringKesalahan && saringKesalahan.ply_dari !== null && l.ply < saringKesalahan.ply_dari) return;
       if (saringKesalahan && saringKesalahan.motif) {
         if (!l.motif || l.motif.utama !== saringKesalahan.motif) return;
         saringKesalahan.motifNama = l.motif.nama;
@@ -277,6 +288,7 @@
         dilewatiKalah++;
         return;
       }
+      if (mode === "hukum") { tambahSoalHukum(g, l, a.langkah[i + 1]); return; }
       /* Sesudah kesalahannya pun masih menang telak: tidak ada yang benar-benar
          hilang, jadi bukan bahan latihan. */
       if (l.eval_sesudah_cp !== null && l.eval_sesudah_cp !== undefined &&
@@ -296,6 +308,35 @@
         lawan: l.warna === "putih" ? g.hitam : g.putih,
         tanggal: g.tanggal
       });
+    });
+  }
+
+  /* Mode "hukum kesalahanmu" (16 Okt 2026): posisi SESUDAH kesalahan sendiri,
+     papan dipegang dari sisi lawan, jawabannya sanggahan engine (langkah
+     terbaik baris ply+1). Hanya kesalahan yang motifnya taktis di sisi
+     "dibiarkan" (app/pola_taktik.py): di situ sanggahannya konkret — memakan
+     buah tergantung, garpu, mat — dan itulah kebiasaan yang dilatih: melihat
+     apa yang bisa dimakan lawan sebelum melangkah. Kesalahan "posisional"
+     tidak dipakai; sanggahannya sering cuma langkah tenang yang tak bisa
+     ditebak dengan alasan. Saringan "posisi belum kalah" sama dengan mode
+     kesalahan (diperiksa di tambahSoal sebelum cabang ini). */
+  function tambahSoalHukum(g, l, berikut) {
+    if (!l.motif || l.motif.sisi !== "membiarkan" ||
+        l.motif.utama === "posisional" || l.motif.utama === "tanpa_data") return;
+    if (!berikut || berikut.ply !== l.ply + 1 || !berikut.langkah_terbaik_uci) return;
+    soalSemua.push({
+      jenis: "hukum",
+      partai_id: g.id, ply: berikut.ply, warna: berikut.warna,
+      san: l.san, san_lawan: berikut.san,
+      terbaik_uci: berikut.langkah_terbaik_uci, terbaik_san: berikut.langkah_terbaik_san,
+      variasi: berikut.variasi_terbaik || [], klasifikasi: l.klasifikasi, motif: l.motif,
+      kehilangan: l.kehilangan_cp,
+      sebelum: null, sesudah: null,
+      format: AlatCatur.formatPartai(g), kontrol: AlatCatur.kontrolPartai(g),
+      pemain: l.warna === "putih" ? g.putih : g.hitam,
+      pemain_id: l.warna === "putih" ? g.putih_id : g.hitam_id,
+      lawan: l.warna === "putih" ? g.hitam : g.putih,
+      tanggal: g.tanggal
     });
   }
 
@@ -361,6 +402,10 @@
       return rantai;
     }).then(function () {
       if (!soalSemua.length) {
+        if (mode === "hukum") {
+          throw new Error("Belum ada soal hukum: tidak ada blunder/kesalahanmu yang membiarkan pola taktis " +
+            "(buah tergantung, garpu, mat, ...) di partai yang sudah dianalisis untuk saringan ini.");
+        }
         throw new Error(kosong(saringKesalahan ? "untuk saringan " + teksSaringKesalahan()
           : "di partai yang sudah dianalisis"));
       }
@@ -454,13 +499,19 @@
       papan.orientation(soal.warna === "putih" ? "white" : "black");
       fenSoal = permainan.fen();
       papan.position(permainan.fen(), false);
-      el.status.textContent = (soal.warna === "putih" ? "Putih" : "Hitam") + " jalan · cari langkah terbaik";
+      el.status.textContent = (soal.warna === "putih" ? "Putih" : "Hitam") + " jalan · " +
+        (soal.jenis === "hukum" ? "cari cara menghukumnya" : "cari langkah terbaik");
       el.soal.textContent = "";
       var pribadi = akunPribadi.indexOf(soal.pemain_id) >= 0;
       el.soal.appendChild(buat("div", null, (partaiTunggal ? soal.pemain + " melawan " : "Melawan ") + soal.lawan +
         (soal.format && soal.format !== "tanpa" ? " · " + soal.format + (soal.kontrol ? " " + soal.kontrol : "") : "") +
         (soal.tanggal ? " · " + soal.tanggal : "")));
-      el.soal.appendChild(buat("div", "kecil redup", "Di partai ini " + (pribadi ? "kamu bermain" : "dimainkan") + " " + soal.san + " (" + (soal.klasifikasi === "blunder" ? "??" : "?") + ")."));
+      if (soal.jenis === "hukum") {
+        el.soal.appendChild(buat("div", "kecil", (pribadi ? "Kamu baru saja bermain " : "Baru saja dimainkan ") + soal.san +
+          (soal.klasifikasi === "blunder" ? "??" : "?") + ". Sekarang kamu memegang lawanmu: temukan cara menghukumnya."));
+      } else {
+        el.soal.appendChild(buat("div", "kecil redup", "Di partai ini " + (pribadi ? "kamu bermain" : "dimainkan") + " " + soal.san + " (" + (soal.klasifikasi === "blunder" ? "??" : "?") + ")."));
+      }
     }).catch(function (e) { galat(e.message); });
   }
 
@@ -529,7 +580,12 @@
       cocok ? "Benar" : (menyerah ? "Jawabannya" : "Bukan itu")));
     el.jawab.appendChild(buat("div", null, "Terbaik: " + soal.terbaik_san +
       (soal.variasi.length > 1 ? "  (" + soal.variasi.slice(0, 6).join(" ") + ")" : "")));
-    if (soal.kehilangan) el.jawab.appendChild(buat("div", "kecil redup", "Langkah asli " + soal.san + " membuang " + soal.kehilangan + " cp"));
+    if (soal.jenis === "hukum") {
+      var dihukum = soal.san_lawan === soal.terbaik_san;
+      el.jawab.appendChild(buat("div", "kecil redup", "Langkahmu " + soal.san + " membuang " + soal.kehilangan +
+        " cp. Di partai, lawanmu menjawab " + (soal.san_lawan || "?") +
+        (dihukum ? " — dan menghukumnya." : " — sanggahan ini terlewat olehnya.")));
+    } else if (soal.kehilangan) el.jawab.appendChild(buat("div", "kecil redup", "Langkah asli " + soal.san + " membuang " + soal.kehilangan + " cp"));
     }
     /* Inti pelajarannya: dari kedudukan apa ke kedudukan apa. "Imbang langsung
        jadi kalah" adalah kasus yang paling mahal. */
@@ -551,6 +607,7 @@
     if (soal.motif) {
       el.jawab.appendChild(buat("div", "kecil", "Pola: " + soal.motif.nama +
         (soal.motif.utama === "posisional" || soal.motif.utama === "tanpa_data" ? ""
+          : soal.jenis === "hukum" ? " — yang dibiarkan langkahmu"
           : soal.motif.sisi === "melewatkan" ? " — yang terlewat di langkah terbaik"
           : " — yang dibiarkan langkah asli")));
     }
@@ -787,11 +844,11 @@
     if (soal && !dijawab) nilai(null, true);
   });
   el.ulangSemua.addEventListener("click", function () {
-    var namaMode = mode === "pembukaan" ? "latihan pembukaan" : "latihan kesalahan partai";
+    var namaMode = mode === "pembukaan" ? "latihan pembukaan" : "latihan kesalahan partai (termasuk hukum kesalahanmu)";
     if (!window.confirm("Lupakan semua catatan benar/salah " + namaMode + "? Semua soalnya muncul lagi.")) return;
     /* Hanya catatan mode yang sedang dibuka; mode lain tidak ikut terhapus,
        dan riwayat di server tetap dihitung di Perkembangan. */
-    Catatan.ulangSemua(mode).then(function () {
+    Catatan.ulangSemua(modeCatatan()).then(function () {
       tampilkanPerkembangan();
       return kumpulkan();
     }).catch(function (e) { galat(e.message); });
@@ -809,8 +866,8 @@
     if (mode !== "pembukaan" && adaSaringanUrl) munculkanSaringan();
     try {
       var u = new URL(window.location.href);
-      if (mode === "pembukaan") u.searchParams.set("mode", "pembukaan"); else u.searchParams.delete("mode");
-      ["pembukaan", "eco_dari", "eco_sampai", "warna", "fase", "nama"].forEach(function (k) { u.searchParams.delete(k); });
+      if (mode === "kesalahan") u.searchParams.delete("mode"); else u.searchParams.set("mode", mode);
+      ["pembukaan", "eco_dari", "eco_sampai", "warna", "fase", "nama", "fen", "ply_dari"].forEach(function (k) { u.searchParams.delete(k); });
       window.history.replaceState(null, "", u);
     } catch (e) { /* URL tidak bisa diubah: tidak apa-apa */ }
     tampilkanPerkembangan();
@@ -877,6 +934,11 @@
   if (qSaring.get("mode") === "pembukaan" && !partaiTunggal) {
     mode = "pembukaan";
     el.mode.value = "pembukaan";
+  }
+  /* ?mode=hukum: tautan "hukum →" dari kartu Pola taktik di halaman Kelemahan. */
+  if (qSaring.get("mode") === "hukum") {
+    mode = "hukum";
+    el.mode.value = "hukum";
   }
   /* Catatan dari server dulu: tanpa itu soal yang sudah benar ikut muncul lagi. */
   muatCatatan().then(isiAkun).then(function () {

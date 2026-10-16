@@ -48,6 +48,20 @@ def bersih(nilai: str | None) -> str | None:
     return None if n.lower() in KOSONG else n
 
 
+def eco_baku(nilai: str | None) -> str | None:
+    """Kode ECO dalam huruf besar ('b90' -> 'B90'); None kalau tidak diketahui.
+
+    Kode ECO memang huruf besar, tapi PGN menyimpannya apa adanya. Saringan
+    ECO di daftar partai memakai rentang `eco >= ? AND eco < ?` (bisa memakai
+    indeks; LIKE tidak) yang membedakan huruf besar-kecil, jadi `b90` akan
+    diam-diam terlewat. Sejak skema v14 database juga menolak ECO yang tidak
+    huruf besar (trigger), jadi jalur impor yang lupa memanggil fungsi ini
+    gagal keras, bukan menyimpan diam-diam.
+    """
+    n = bersih(nilai)
+    return n.upper() if n else n
+
+
 def ke_int(nilai: str | None) -> int | None:
     n = bersih(nilai)
     if n is None:

@@ -1547,6 +1547,27 @@ Batas yang diketahui:
 - Skor per posisi dari 3–30 partai: selisih ±20 dari sampel sekecil itu masih
   bisa kebetulan. Jumlah partai selalu tampil di sebelahnya.
 
+### Tambahan 16 Okt 2026: rencana belajar posisi lemah
+
+Rincian tiap posisi kini juga memuat **partaimu dari posisi itu**
+(`partai_saya`: kalah dulu lalu terbaru, paling banyak 30) dengan
+**kesalahan pertamamu sesudah titik keluar buku** (blunder/mistake pertama
+warna sendiri pada ply ≥ titik, tanpa batas jendela), dan tautan ke Latihan
+`?fen=<posisi>&ply_dari=<ply>&warna=` — saringan partai lewat
+`/api/partai?fen=` yang sudah ada, soal hanya dari ply ≥ titik. Kait uji
+`?uji_buka=1` membuka rincian baris pertama untuk peramban headless.
+
+Bukti: tes `test_partai_saya_dan_kesalahan_pertama` (kesalahan sebelum titik
+dan milik lawan tidak terhitung; urutan kalah dulu; belum dianalisis
+ditandai), 991 tes lolos. Data nyata (server uji :8001): Rossolimo `4.Bxc6
+bxc6` → 17 partai, 15 dengan kesalahan sesudahnya; Latihan dari tautannya
+17 soal. Bagian baru menambah 0,4–0,6 s pada hitungan penuh.
+
+Batas: `ply_dari` memakai ply titik dari partai contoh; partai yang mencapai
+posisi yang sama lewat transposisi di ply lain bisa kehilangan atau mendapat
+satu-dua soal di sekitar titik. Ekspor PGN garis GM dari satu posisi belum
+dibuat (`repertoire_pgn` hanya membangun pohon dari posisi awal).
+
 ## Phase 10 — Mentor: Kurikulum dari Satu GM
 
 RENCANA §16 ("GM Mentor Mode"), 16 Okt 2026. Halaman `/static/mentor.html`

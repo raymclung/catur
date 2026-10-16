@@ -37,7 +37,7 @@ from .sumber_impor import catat as catat_sumber, sudah_selesai
 # 2026). Dua di antaranya sekarang berkas sendiri; namanya tetap diteruskan
 # dari sini supaya pemanggil lama — belasan skrip dan tes — tidak perlu diubah.
 from .impor_bantu import (EVENT_GENERIK, EVENT_PAPAN, GELAR,        # noqa: F401
-                          KOSONG, bersih, ke_elo, ke_int, normalisasi_nama,
+                          KOSONG, bersih, eco_baku, ke_elo, ke_int, normalisasi_nama,
                           tahun_dari_tanggal, turnamen_dari_header)
 from .impor_hash import (bahan_hash, cari_kembar_lintas_sumber,      # noqa: F401
                          hash_partai, hitung_ulang_hash,
@@ -268,7 +268,7 @@ def impor_satu(
             "elo_putih = ?, elo_hitam = ?, kontrol_waktu = ?, format = ?, jumlah_langkah = ?, "
             "pgn = ?, sumber_url = ?, hash_unik = ?, diimpor_pada = ? WHERE id = ?",
             (
-                tanggal, hasil, bersih(h.get("ECO")), bersih(h.get("Opening")),
+                tanggal, hasil, eco_baku(h.get("ECO")), bersih(h.get("Opening")),
                 ke_elo(h.get("WhiteElo")), ke_elo(h.get("BlackElo")),
                 bersih(h.get("TimeControl")),
                 format_dari_kontrol_waktu(bersih(h.get("TimeControl")), sumber), jumlah_langkah,
@@ -296,7 +296,7 @@ def impor_satu(
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 turnamen_id, putih_id, hitam_id, tanggal, babak,
-                hasil, bersih(h.get("ECO")), bersih(h.get("Opening")),
+                hasil, eco_baku(h.get("ECO")), bersih(h.get("Opening")),
                 ke_elo(h.get("WhiteElo")), ke_elo(h.get("BlackElo")),
                 bersih(h.get("TimeControl")),
                 format_dari_kontrol_waktu(bersih(h.get("TimeControl")), sumber), jumlah_langkah,
