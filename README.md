@@ -46,6 +46,20 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
 - **Halaman pemain** — rating, skor sebagai Putih/Hitam, pembukaan per ECO.
 - **Tebak langkah GM** — main sebagai GM di partai aslinya; tiap langkah dinilai
   sama dengan GM, beda tapi tetap bagus menurut engine, atau meleset.
+- **Pola taktik di balik kesalahan** — tiap blunder/mistake diberi motif (garpu,
+  pin, tusuk sate, buah tergantung, serangan tersingkap, mat baris belakang)
+  dari garis engine yang sudah tersimpan, tanpa menjalankan engine lagi. Motif
+  hanya diberi label kalau garisnya benar-benar memenangkan materi; latihan bisa
+  disaring per motif.
+- **Bandingkan dua pemain** — gaya bermain, angka engine, pembukaan per warna,
+  dan partai di antara keduanya, berdampingan.
+- **Kamu vs GM dari posisi yang sama** — tiap partai sendiri dipotong di titik
+  keluar buku GM; per posisi: skor sendiri dibanding rata-rata sendiri, skor GM
+  untuk warna yang sama, langkah GM, dan partai GM terkuat untuk dipelajari.
+- **Mentor: kurikulum dari satu GM** — pilih GM, dapat empat minggu (pembukaan
+  repertoire, konversi keunggulan, teknik endgame, tekanan posisional) berisi
+  partai GM itu yang dipilih dengan kriteria terukur dari analisis. Urutan
+  minggu dari kesalahan berlebih sendiri terhadap GM itu.
 - **Rencana latihan mingguan & ekspor repertoire** — kartu latihan disusun dari
   kelemahan yang terukur; repertoire bisa diunduh sebagai PGN untuk dihafal di
   Lichess Study atau HP.
@@ -70,7 +84,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   antrean dicatat ke berkas yang hanya ditambah (asal permintaan, User-Agent,
   alasan), terpisah dari log server, supaya "siapa yang menghentikan ini?"
   selalu bisa dijawab.
-- **921 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+- **981 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
   jaringan lokal, tes halaman di peramban headless yang dijalankan CI, dan tes
   engine WASM di peramban sungguhan lewat DevTools Protocol (dilewati di CI
   karena berkas engine tidak masuk repo).

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mentor — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/banding.html" title="Bandingkan dua pemain berdampingan">Banding</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/tebak.html" title="Main sebagai GM di partai aslinya dan tebak langkahnya">Tebak GM</a>
+    <a href="/static/mentor.html" class="aktif" title="Kurikulum 4 minggu dari partai satu GM">Mentor</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/posisi-gm.html" title="Hasilmu vs GM dari posisi pembukaan yang sama">vs GM</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+    <a href="/tanya" title="Tanya database pakai bahasa Indonesia">Tanya</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="saring">
+    <label>Belajar dari
+      <input id="cari-gm" list="daftar-gm" placeholder="ketik nama GM, mis. Carlsen" autocomplete="off" size="30">
+      <datalist id="daftar-gm"></datalist>
+    </label>
+    <label>Lawan di partaimu
+      <select id="lawan" title="Partaimu yang dipakai untuk mengukur kelemahan. Ketentuan Ray: lawan ber-rating di atas 2200">
+        <option value="ketentuan" selected>rating &gt; 2200 atau bergelar</option>
+        <option value="2200">hanya rating &gt; 2200</option>
+        <option value="gelar">hanya bergelar</option>
+        <option value="semua">semua lawan</option>
+      </select>
+    </label>
+    <span class="kecil redup" id="status"></span>
+  </div>
+
+  <div class="kartu" id="saran">
+    <div class="kecil redup" style="padding:14px 14px 6px">Pilih GM yang ingin kamu pelajari. Kurikulum disusun dari
+      partai GM itu: tiap minggu satu tema, urutannya dari kelemahanmu sendiri.</div>
+    <div id="saran-gm" style="padding:0 14px 14px"></div>
+  </div>
+
+  <div class="kartu" id="ringkas" hidden></div>
+  <div id="minggu"></div>
+</main>
+
+<script src="/static/mentor.js"></script>
+</body>
+</html>

@@ -20,7 +20,8 @@
     ikhtisar: document.getElementById("ikhtisar"),
     perFase: document.getElementById("per-fase"),
     perWarnaFormat: document.getElementById("per-warna-format"),
-    perPembukaan: document.getElementById("per-pembukaan")
+    perPembukaan: document.getElementById("per-pembukaan"),
+    polaTaktik: document.getElementById("pola-taktik")
   };
 
   var akunSemua = [];
@@ -97,7 +98,8 @@
     var formatDipilih = el.format.value;
     el.galat.hidden = true;
     el.status.textContent = "mengambil daftar…";
-    [el.ikhtisar, el.perFase, el.perWarnaFormat, el.perPembukaan].forEach(function (e) { e.textContent = ""; });
+    [el.ikhtisar, el.perFase, el.perWarnaFormat, el.perPembukaan, el.polaTaktik].forEach(function (e) { e.textContent = ""; });
+    muatPola(ke, daftarAkun, batas);
 
     Promise.all(daftarAkun.map(function (a) { return partaiAkun(a, batas); })).then(function (kelompok) {
       var partai = [];
@@ -133,6 +135,91 @@
       });
       return rantai.then(function () { if (ke === permintaanKe) gambar(agg, dipakai); });
     }).catch(function (e) { galat(e.message); el.status.textContent = ""; });
+  }
+
+  /* ---------- pola taktik (16 Okt 2026) ---------- */
+
+  /* Motif di balik blunder/mistake sendiri: dihitung server dari garis engine
+     yang tersimpan (app/pola_taktik.py, GET /api/pola), dengan saringan yang
+     sama dengan halaman ini. Diambil terpisah supaya tabel lain tidak
+     menunggu. */
+  function muatPola(ke, daftarAkun, batas) {
+    if (!daftarAkun.length) return;
+    var url = "/api/pola?" + daftarAkun.map(function (a) { return "pemain_id=" + a.id; }).join("&") +
+      "&lawan=" + el.lawan.value + "&batas=" + batas +
+      (el.format.value !== "semua" ? "&format=" + el.format.value : "");
+    el.polaTaktik.appendChild(buat("h2", "judul-kartu", "Pola taktik di balik kesalahan"));
+    el.polaTaktik.appendChild(buat("div", "kecil redup", "menghitung…"));
+    ambil(url).then(function (d) { if (ke === permintaanKe) gambarPola(d); })
+      .catch(function (e) { if (ke === permintaanKe) { el.polaTaktik.lastChild.textContent = e.message; } });
+  }
+
+  function gambarPola(d) {
+    var w = el.polaTaktik;
+    w.textContent = "";
+    w.appendChild(buat("h2", "judul-kartu", "Pola taktik di balik kesalahan"));
+    var c = buat("div", "kecil redup",
+      d.total_kesalahan.toLocaleString("id-ID") + " blunder + kesalahan sendiri dari " + d.total_partai +
+      " partai. Motif dibaca dari garis engine yang tersimpan: \"dibiarkan\" = sanggahan lawan sesudah langkahmu, " +
+      "\"terlewat\" = taktik di langkah terbaikmu. Motif hanya diberi label kalau garisnya benar-benar " +
+      "memenangkan materi (≥ 2 pion) atau mat; selebihnya \"posisional\".");
+    c.style.padding = "0 14px 8px";
+    w.appendChild(c);
+    if (!d.motif.length) { w.appendChild(buat("div", "kecil redup", "Tidak ada kesalahan untuk saringan ini.")); return; }
+
+    var t = document.createElement("table");
+    var thead = document.createElement("thead"), trh = document.createElement("tr");
+    ["Pola", "Jumlah", "Porsi", "??", "?", "Dibiarkan / terlewat", "Pembukaan / tengah / akhir", "Contoh", ""]
+      .forEach(function (k) { trh.appendChild(buat("th", null, k)); });
+    thead.appendChild(trh); t.appendChild(thead);
+    var tb = document.createElement("tbody");
+    var terbanyak = Math.max.apply(null, d.motif.filter(function (m) { return m.kunci !== "posisional"; })
+      .map(function (m) { return m.persen; }).concat([0.1]));
+    d.motif.forEach(function (m) {
+      var taktis = m.kunci !== "posisional" && m.kunci !== "tanpa_data";
+      var tr = document.createElement("tr");
+      tr.style.cursor = "default";
+      var td0 = buat("td", null, m.nama);
+      if (!taktis) td0.className = "redup";
+      tr.appendChild(td0);
+      tr.appendChild(buat("td", "mono", m.jumlah));
+      var tdP = buat("td", "mono");
+      var bar = buat("div", "pref-baris"); bar.style.gridTemplateColumns = "44px 1fr";
+      bar.appendChild(buat("span", null, m.persen.toFixed(1) + "%"));
+      var isiW = buat("div"), isi = buat("div", "isi");
+      isi.style.width = taktis ? Math.max(2, 100 * m.persen / terbanyak) + "%" : "0";
+      isi.style.background = taktis && m.persen >= 0.75 * terbanyak ? "#b3261e" : "var(--aksen)";
+      isiW.appendChild(isi); bar.appendChild(isiW); tdP.appendChild(bar);
+      tr.appendChild(tdP);
+      tr.appendChild(buat("td", "mono klas-blunder", m.blunder));
+      tr.appendChild(buat("td", "mono klas-mistake", m.mistake));
+      tr.appendChild(buat("td", "mono", taktis ? m.membiarkan + " / " + m.melewatkan : "—"));
+      tr.appendChild(buat("td", "mono", m.fase.pembukaan + " / " + m.fase.tengah + " / " + m.fase.akhir));
+      var tdC = buat("td", "kecil");
+      m.contoh.slice(0, 3).forEach(function (x, i) {
+        if (i) tdC.appendChild(teks(" · "));
+        var a = document.createElement("a");
+        a.href = "/partai/" + x.partai_id;
+        a.target = "_blank";
+        a.title = x.tanggal + " vs " + x.lawan + " · terbaik " + (x.terbaik_san || "?");
+        a.appendChild(teks(x.nomor_langkah + (x.warna === "putih" ? ". " : "… ") + x.san));
+        tdC.appendChild(a);
+      });
+      tr.appendChild(tdC);
+      var tdL = buat("td");
+      if (taktis) {
+        var l = document.createElement("a");
+        l.href = "/static/latihan.html?akun=" + encodeURIComponent(el.akun.value) + "&lawan=" + el.lawan.value +
+          (el.format.value !== "semua" ? "&format=" + el.format.value : "") + "&motif=" + m.kunci;
+        l.title = "Soal latihan dari kesalahan dengan pola ini saja";
+        l.appendChild(teks("latih →"));
+        tdL.appendChild(l);
+      }
+      tr.appendChild(tdL);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    var gulir = buat("div", "gulir"); gulir.appendChild(t); w.appendChild(gulir);
   }
 
   /* ---------- tampilan ---------- */

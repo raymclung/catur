@@ -98,7 +98,30 @@ class UjiSaringanPosisiDanSumber(unittest.TestCase):
         sudah menyaringnya, daftar partai belum (audit 27 Sep 2026: 16 partai)."""
         self.conn.execute("UPDATE pemain SET jenis = 'mesin' WHERE id = 2")
         self.assertEqual(cari_partai(self.conn, sumber="gm")["partai"], [])
+        self.assertEqual(cari_partai(self.conn, sumber="gm")["total"], 0)
         self.assertEqual(cari_partai(self.conn)["total"], 3)      # tanpa saringan tetap ada
+
+    def test_total_gm_sama_dengan_syarat_antar_manusia(self):
+        """Total gm dihitung sebagai selisih (semua - yang melibatkan bukan-manusia)
+        sejak 10 Okt 2026; harus sama persis dengan NOT EXISTS lama, termasuk
+        partai yang KEDUA pemainnya bukan-manusia (dikurangkan sekali, bukan dua)."""
+        t = sekarang()
+        for i, jenis in ((3, None), (4, "mesin"), (5, "konsultasi")):
+            self.conn.execute("INSERT INTO pemain(id,nama,nama_normal,jenis,dibuat_pada) "
+                              "VALUES(?,?,?,?,?)", (i, f"P{i}", f"p{i}", jenis, t))
+        for pid, putih, hitam, hasil in [(10, 1, 3, "1-0"), (11, 3, 4, "0-1"),
+                                         (12, 4, 5, "1/2-1/2"), (13, 5, 1, "1-0")]:
+            self.conn.execute(
+                "INSERT INTO partai(id,putih_id,hitam_id,hasil,pgn,sumber,hash_unik,diimpor_pada) "
+                "VALUES(?,?,?,?,'x','twic',?,?)", (pid, putih, hitam, hasil, f"g{pid}", t))
+        self.conn.commit()
+        from app.repositori import _syarat
+        for k in ({}, {"hasil": "1-0"}, {"hasil": "menang-kalah"}):
+            with self.subTest(**k):
+                where, params = _syarat(None, "gm", None, k.get("hasil"))
+                lama = self.conn.execute(f"SELECT COUNT(*) FROM partai g {where}", params).fetchone()[0]
+                self.assertEqual(cari_partai(self.conn, sumber="gm", **k)["total"], lama)
+        self.assertEqual(cari_partai(self.conn, sumber="gm")["total"], 3)   # 1, 3, 10
 
     def test_posisi_awal_semua_partai(self):
         import chess

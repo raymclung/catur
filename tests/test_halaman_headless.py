@@ -85,6 +85,18 @@ HALAMAN = (
     # tapi ketiganya ditulis tanya.js ke tempat yang sama setelah /api/tanya/status.
     ("/tanya", ("siap di komputer ini", "sudah di memori", "belum termuat", "Ollama tidak berjalan", "Ollama berjalan tapi model")),
     ("/static/tersimpan.html", ("Belum ada yang disimpan",)),
+    # Banding (16 Okt 2026): satu partai Carlsen–Caruana di database uji; skor
+    # head-to-head dan langkah pertama 1.c4 hanya ada kalau /api/banding terbaca.
+    ("/static/banding.html?a=1&b=2", ("1 menang, 0 remis, 0 kalah", "1.c4 100%")),
+    # vs GM (16 Okt 2026): database uji hanya punya 2 partai GM, jadi partai
+    # akun keluar buku sebelum langkah ke-4 (partai berjam tidak punya Elo, jadi
+    # tersaring ketentuan lawan: tinggal 1). Jalur bernomor ditulis JS dari
+    # /api/banding-gm.
+    ("/static/posisi-gm.html", ("Keluar buku GM sebelum langkah ke-4: 1 partai",
+                                "1.e4 c5 2.Nf3 d6 3.d4 cxd4 — 1 partai")),
+    # Mentor (16 Okt 2026): partai GM di database uji belum dianalisis, jadi
+    # halaman berhenti di pesan "kurang dari 50" yang ditulis JS dari /api/mentor.
+    ("/static/mentor.html?gm=1", ("yang sudah dianalisis kurang dari 50",)),
     # Halaman pembantu tidak memanggil API sebelum Mulai; ?uji_mulai=1 tanpa
     # kode berhenti di pemeriksaan kode — cukup untuk membuktikan JS-nya
     # termuat dan jalan, tanpa mengunduh engine 7 MB.

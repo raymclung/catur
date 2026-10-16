@@ -54,6 +54,14 @@
   - [Bukti (12 Sep 2026)](#bukti-12-sep-2026)
   - [Batas yang diketahui](#batas-yang-diketahui)
   - [Belum tersambung](#belum-tersambung)
+- [Phase 7 — Pola Taktik Kesalahan Sendiri](#phase-7--pola-taktik-kesalahan-sendiri)
+  - [Kenapa tanpa engine dan tanpa tabel baru](#kenapa-tanpa-engine-dan-tanpa-tabel-baru)
+  - [Cara motif dibaca](#cara-motif-dibaca)
+  - [Bukti (16 Okt 2026)](#bukti-16-okt-2026)
+  - [Batas yang diketahui](#batas-yang-diketahui-1)
+- [Phase 8 — Bandingkan Dua Pemain](#phase-8--bandingkan-dua-pemain)
+- [Phase 9 — Kamu vs GM dari Posisi yang Sama](#phase-9--kamu-vs-gm-dari-posisi-yang-sama)
+- [Phase 10 — Mentor: Kurikulum dari Satu GM](#phase-10--mentor-kurikulum-dari-satu-gm)
 ---
 
 ## Phase 1 — Chess GM Database
@@ -1371,6 +1379,226 @@ dan nav `web/`; modul inti yang mandiri membuat penyambungannya memang cuma
 beberapa baris.
 
 ---
+
+## Phase 7 — Pola Taktik Kesalahan Sendiri
+
+RENCANA §14 (pattern library), dikerjakan 16 Okt 2026 atas pilihan Ray.
+Kelemahan dan Kekalahan sudah menjawab DI MANA kesalahan terjadi (fase,
+warna, pembukaan); bagian ini menjawab JENIS apa: garpu, pin, buah tergantung,
+mat, dst. Data 10 Okt: ±58% kekalahan Sicilian/English melawan lawan kuat
+jatuh di tengah permainan; "lebih teliti" tidak bisa dilatih, "sering
+membiarkan buah tak terjaga" bisa.
+
+Berkas: `app/pola_taktik.py` (motif + `GET /api/pola`), field `motif` di
+`GET /api/partai/{id}/analisis`, kartu "Pola taktik" di `web/kelemahan.*`,
+`?motif=` di `web/latihan.js`, tes `tests/test_pola_taktik.py`.
+
+### Kenapa tanpa engine dan tanpa tabel baru
+
+Semua bahan sudah ada di `analisis_langkah`: baris kesalahan menyimpan
+`variasi_terbaik` (taktik yang tersedia untukku), dan baris ply+1 menyimpan
+langkah terbaik lawan dari posisi SESUDAH kesalahan — itulah sanggahannya.
+Motif dibaca dari dua garis itu dengan python-chess. Papan disusun ulang dari
+kolom `uci`, jadi PGN tidak di-parse. Terukur: 120 partai 0,7 s, 500 partai
+2,9 s lewat HTTP, cukup untuk dihitung per permintaan. Tanpa tabel berarti
+tanpa migrasi, dan label selalu mengikuti versi heuristik terbaru; kalau
+kelak terlalu lambat, hasilnya bisa disimpan sebagai tabel turunan.
+
+### Cara motif dibaca
+
+| Motif | Syarat (pada tiga langkah pertama pihak penyerang) |
+|---|---|
+| mat / mat baris belakang | garis berakhir mat, atau `mat_sesudah` melaporkan mat paksa; "baris belakang" = benteng/menteri memberi mat di baris raja |
+| buah tergantung | penyerang memakan buah ≥ 3 yang tidak dijaga |
+| garpu | buah yang baru melangkah menyerang ≥ 2 sasaran (raja, buah lebih mahal, atau buah ≥ 3 tak terjaga) |
+| tusuk sate | buah jarak jauh menyerang raja/menteri, di belakangnya buah ≥ 3 |
+| pin | buah lawan ≥ 3 baru terpaku ke raja oleh buah yang melangkah |
+| serangan tersingkap | buah jarak jauh LAIN kini menyerang raja/benteng/menteri |
+| promosi | langkah promosi |
+| taktik lain | garis menang materi tanpa motif di atas |
+| posisional | tidak ada mat dan tidak ada kehilangan materi ≥ 2 pion dalam garis |
+
+Aturan yang mencegah label karangan (masing-masing punya tes):
+
+1. Motif material hanya diberi label kalau garisnya **sungguh menang ≥ 2
+   pion**. Garis yang berhenti tepat sesudah tangkapan dihitung seolah
+   penangkapnya dimakan balik kalau masih bisa.
+2. Motif dari **langkah paling awal** yang menang; pencarian **berhenti**
+   begitu materi sudah dimenangkan. Kasus nyata partai 275113: benteng gratis
+   dimakan di langkah kedua, lalu `Qxf7` kebetulan memaku gajah — dulu
+   terbaca "pin", sekarang "buah tergantung".
+3. Label utama dari sisi "dibiarkan" (sanggahan lawan); sisi "terlewat"
+   dipakai hanya kalau sanggahannya tidak taktis.
+
+### Bukti (16 Okt 2026)
+
+- 26 tes baru; seluruh suite 947 lolos (9 dilewati), 6 uji halaman Edge lolos.
+- Diperiksa dengan mata pada 6 kesalahan nyata: garpu 275104 (`Rb1??
+  Nxd3 cxd3 Bc3`, gajah menyerang menteri + benteng) dan 275116 (`Rxd5??
+  Nc7`), mat baris belakang 275110 (`Re8?? Qh7+ Kf8 Qh8#`), buah tergantung
+  275495, 275010, 275113 — semua sesuai setelah aturan 2.
+- HTTP (server uji :8001, database hanya dibaca): 5 akun, lawan ketentuan,
+  120 partai → 473 kesalahan: buah tergantung 15,2%, taktik lain 9,7%, mat
+  7,6%, garpu 4,7%, posisional 59,2%. 500 partai → buah tergantung 20,7%,
+  garpu 5,7%. Masukan salah (`lawan`, `jenis`, `batas` > 500, tanpa
+  `pemain_id`) → 422.
+- Edge headless: kartu tampil di Kelemahan dengan tautan `latih →`;
+  `latihan.html?akun=2&lawan=ketentuan&motif=garpu` → "pola Garpu saja",
+  21 soal.
+
+### Batas yang diketahui
+
+- Heuristik, bukan engine. Garis tersimpan biasanya 6 ply; motif yang baru
+  muncul lebih dalam jatuh ke "posisional" atau "taktik lain". Sengaja: lebih
+  baik "tidak terbaca" daripada motif karangan. Karena itu angka "posisional"
+  besar (±50–60%) dan bukan berarti semua kesalahan itu strategis.
+- Belum dikenali: beban berlebih (overload), pengalihan (deflection),
+  penghalangan, zwischenzug, pion lewat. Kesalahan seperti itu masuk "taktik
+  lain" kalau menang materi.
+- Pin hanya ke raja (pin relatif ke menteri belum).
+- Label satu per kesalahan; daftar lengkap tetap ada di `membiarkan` /
+  `melewatkan` respons API.
+
+## Phase 8 — Bandingkan Dua Pemain
+
+RENCANA §10 ("Compare two GM"), 16 Okt 2026. Halaman `/static/banding.html`
+(`?a=&b=&format=`), tertaut dari menu semua halaman dan dari profil pemain
+("bandingkan dengan…"). Berkas: `app/banding_pemain.py` (`GET /api/banding`),
+`web/banding.*`, tes `tests/test_banding_pemain.py` + satu entri di
+`tests/test_halaman_headless.py`.
+
+Yang dihitung baru hanya yang belum punya endpoint:
+
+- **Gaya** dari kolom `partai` (partai selesai saja): skor, porsi remis, rata
+  panjang, menang cepat (≤ 30 langkah, dari kemenangan), partai panjang
+  (≥ 60), rata Elo lawan (Elo kosong tidak dirata-rata; jumlah partai ber-Elo
+  ikut dikirim), skor melawan Elo lebih tinggi/rendah, langkah pertama
+  sebagai Putih dari `posisi` ply 0 (dengan jumlah terindeks).
+- **Head-to-head**: semua partai A–B, skor dari sudut A; 200 terbaru dikirim,
+  `total` selalu jumlah sebenarnya.
+- **Pembukaan**: `pembukaan_pemain()` apa adanya; halaman menandai keluarga
+  ECO yang dimainkan keduanya.
+- **Angka engine** TIDAK dihitung ulang: halaman memanggil `/api/ringkasan`
+  per pemain sesudah tabel lain tampil (Nakamura, 10.440 partai: 1,1–3,7 s).
+
+Bukti (16 Okt 2026): 12 tes baru, seluruh suite 960 lolos (9 dilewati), uji
+halaman Edge lolos termasuk Banding. HTTP (server uji :8001, database hanya
+dibaca): Carlsen–Caruana 0,18 s, Nakamura–Carlsen 0,21 s; head-to-head
+Carlsen–Caruana 244 partai, 114 menang / 91 remis / 39 kalah dari sudut
+Carlsen. Masukan salah → 422, pemain tidak ada → 404.
+
+Batas yang diketahui:
+
+- Saringan format hampir tak berguna untuk partai GM: PGN TWIC tidak punya
+  TimeControl, jadi Carlsen 8.012 dari 8.024 partai berformat "tanpa".
+  Halaman menyebutnya terang-terangan.
+- Head-to-head mencampur OTB dan online (Titled Tuesday, Freestyle/960) karena
+  database tidak membedakannya per partai.
+- Tanpa uji signifikansi: selisih skor kecil dari sampel kecil tetap tampil
+  sebagai angka; jumlah partai di tiap sel adalah penangkalnya.
+
+## Phase 9 — Kamu vs GM dari Posisi yang Sama
+
+RENCANA Phase 7 ("compare with GM games"), 16 Okt 2026. Halaman
+`/static/posisi-gm.html` (menu "vs GM"), `app/banding_gm.py`
+(`GET /api/banding-gm`, `GET /api/banding-gm/rincian`), tes
+`tests/test_banding_gm.py` + satu entri uji halaman.
+
+**Yang sudah ada dan TIDAK dibuat ulang:** kartu "Praktik GM" di halaman
+partai (di langkah mana satu partai keluar dari database GM) dan Latihan
+pembukaan (posisi tempat langkahku jarang dimainkan GM). Keduanya soal
+LANGKAH. Fase ini soal HASIL dari posisi yang sama.
+
+Cara kerja, hanya membaca:
+
+1. Partai akun sendiri dengan saringan lawan yang sama dengan halaman lain.
+2. Titik keluar buku = posisi TERDALAM (ply ≥ 6) yang masih punya ≥ 20
+   partai GM (sumber GM, sejak 2000, antar-manusia — sama dengan
+   `latihan_pembukaan`). Dipindai dari ply terdalam ke atas; cek "cukup?"
+   membaca kursor bertahap dan berhenti di partai GM ke-20.
+3. Per titik yang dicapai ≥ 3 kali: skorku, skor GM untuk warna yang sama,
+   langkah berikut di partaiku, rata kehilangan cp di 15 langkahku sesudahnya.
+   Rincian (langkah GM, cp GM, tiga partai GM terkuat) diambil per baris saat
+   dibuka.
+
+**Peringkat memakai skor dibanding rata-rata sendiri**, bukan dibanding skor
+GM: aku main blitz melawan lawan setara, GM main klasik melawan GM, jadi skor
+mentahnya tidak setara. Skor GM hanya menandai posisi yang memang sulit
+(< 40% untuk warna itu → "sulit juga bagi GM", tidak dinaikkan).
+
+Bukti (16 Okt 2026): 10 tes baru, seluruh suite 971 lolos (9 dilewati), uji
+halaman Edge lolos. HTTP (server uji :8001, database hanya dibaca, dua batch
+engine sesi lain berjalan): permintaan pertama 2,7 s (sebelum cek berhenti
+dini: 20,7 s), dari cache 0,04 s, rincian 1,3 s; masukan salah → 422. Data
+nyata (5 akun, lawan ketentuan): 5.883 partai, 3.266 punya titik, 297 posisi
+dicapai ≥ 3 kali, skor rata-rata 47,6%. Teratas: Rossolimo `3.Bb5 e6
+4.Bxc6 bxc6` sebagai Hitam, 17 partai, 26,5% (−21,1), GM Hitam 44,4%.
+
+Batas yang diketahui:
+
+- 2.617 partai keluar buku sebelum ply 6 (jalur yang jarang dimainkan GM
+  sejak 2000, mis. `1.e4 c5 2.d4 cxd4 3.c3 d3`). Tidak dihitung, tapi
+  ditampilkan beserta jalurnya; diperiksa: partai TWIC terindeks lengkap,
+  jadi ini bukan indeks yang bolong.
+- Cache per proses server, dibuang saat partai/posisi/analisis bertambah;
+  selama batch analisis berjalan, hitungan sering diulang (2–3 s).
+- Kehilangan cp GM hanya patokan: format berbeda, dan sampel 150 partai GM
+  teranalisis terbaru per posisi.
+- Skor per posisi dari 3–30 partai: selisih ±20 dari sampel sekecil itu masih
+  bisa kebetulan. Jumlah partai selalu tampil di sebelahnya.
+
+## Phase 10 — Mentor: Kurikulum dari Satu GM
+
+RENCANA §16 ("GM Mentor Mode"), 16 Okt 2026. Halaman `/static/mentor.html`
+(`?gm=<id>`, menu "Mentor"), `app/mentor.py` (`GET /api/mentor`), tes
+`tests/test_mentor.py` + satu entri uji halaman.
+
+**Yang sudah ada dan TIDAK dibuat ulang:** "Rencana minggu ini"
+(`app/rencana.py`, Beranda) memilih kelemahan dari angka sendiri. Yang belum
+ada adalah inti §16: pilih seorang GM, lalu kurikulum disusun dari partai GM
+itu, "jangan asal, gunakan data".
+
+Empat tema, satu per minggu, masing-masing kriteria terukur dari analisis
+(sudut GM; alasan berangka ikut tiap partai):
+
+| Tema | Partai GM yang dipilih |
+|---|---|
+| Pembukaan repertoire-mu | GM menang dalam English/Catalan sebagai Putih atau Sicilian/Ragozin sebagai Hitam (`pembukaan_repertoire()`), paling banyak dua per pembukaan |
+| Konversi | unggul ≥ +2,00, sesudahnya tidak pernah di bawah +1,00, menang ≥ 15 langkah kemudian |
+| Endgame | skor engine −0,50..+1,50 di ply 80 (awal fase akhir), lalu menang |
+| Posisional | menang, lawan tanpa blunder dan ≤ 1 mistake, ≥ 35 langkah, +2,00 belum ada sebelum langkah 25 |
+
+Satu partai hanya di satu tema; posisional (kriteria paling umum) mengambil
+terakhir. Urutan dalam tema: Elo lawan tertinggi, paling banyak dua partai per
+lawan (tanpa itu Carlsen = lima partai melawan Caruana). Tiap partai tertaut
+ke halaman partai dan Tebak GM (`?pemain_id=<gm>&partai_id=<id>`).
+
+**Urutan minggu = kesalahan berlebih.** Tiap langkah sendiri masuk tepat satu
+ember (konversi kalau `eval_sebelum_cp` ≥ +2,00, selain itu menurut fase),
+diukur oleh fungsi yang sama untuk Ray dan GM, lalu (angka Ray − angka GM) ×
+porsi langkah Ray di ember itu. Rasio Ray ÷ GM sempat dipakai dan dibuang:
+kesalahan pembukaan GM nyaris nol (Carlsen 0,22 per 100), jadi rasio
+pembukaan selalu 20× lebih dan minggu 1 selalu pembukaan.
+
+Bukti (16 Okt 2026): 10 tes baru, seluruh suite 981 lolos (9 dilewati), uji
+halaman Edge lolos. HTTP (server uji :8001, database hanya dibaca): Carlsen
+3,0 s pertama, 0,007 s dari cache; Nakamura 3,4 s; lawan salah / GM = akun
+sendiri → 422, GM tidak ada → 404. Tautan Tebak GM dibuka di Edge: "Kamu
+memegang Putih (Carlsen)". Data nyata (5 akun, lawan ketentuan, 5.800 partai
+teranalisis): minggu 1 posisional (kamu 10,38 vs Carlsen 1,38 kesalahan per
+100 langkah, 41% langkahmu, berlebih 3,69), 2 konversi (11,76 vs 3,74;
+keunggulan gagal dimenangkan 31,4% vs 10,0%), 3 pembukaan, 4 endgame.
+
+Batas yang diketahui:
+
+- Urutan minggu hampir sama untuk GM mana pun: angka Ray jauh di atas semua
+  GM, jadi selisihnya didominasi angka Ray. Yang berbeda per GM adalah
+  partainya.
+- Partai Ray kebanyakan blitz dan dianalisis dengan profil berbeda dari
+  partai GM (sebagian besar `cepat`); angka dipakai untuk urutan, bukan vonis.
+- "Endgame" didefinisikan dengan ply 80 (sama dengan Ringkasan), bukan
+  dengan materi di papan.
+- Kurikulum statis: belum mencatat partai mana yang sudah dipelajari.
 
 ## Catatan lintas fase: siapa yang boleh menyuruh server (27 Sep 2026)
 

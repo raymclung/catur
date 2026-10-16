@@ -44,6 +44,14 @@
       v.title = "Identitas dipastikan lewat FIDE ID";
       h.appendChild(v);
     }
+    /* Halaman Banding (16 Okt 2026) dengan pemain ini sebagai A; B dipilih di sana. */
+    var banding = document.createElement("a");
+    banding.href = "/static/banding.html?a=" + p.id;
+    banding.className = "kecil";
+    banding.style.marginLeft = "12px";
+    banding.title = "Bandingkan pemain ini dengan pemain lain, berdampingan";
+    banding.appendChild(teks("bandingkan dengan… →"));
+    h.appendChild(banding);
     el.profil.appendChild(h);
     document.title = p.nama + " — McLung ChessBase";
 
