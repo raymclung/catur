@@ -84,7 +84,7 @@ dianalisis Stockfish, lalu dipakai untuk latihan.
   antrean dicatat ke berkas yang hanya ditambah (asal permintaan, User-Agent,
   alasan), terpisah dari log server, supaya "siapa yang menghentikan ini?"
   selalu bisa dijawab.
-- **981 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
+- **991 tes** (`unittest`), termasuk tes keamanan untuk rute yang dibuka ke
   jaringan lokal, tes halaman di peramban headless yang dijalankan CI, dan tes
   engine WASM di peramban sungguhan lewat DevTools Protocol (dilewati di CI
   karena berkas engine tidak masuk repo).

@@ -123,6 +123,23 @@ class UjiSaringanPosisiDanSumber(unittest.TestCase):
                 self.assertEqual(cari_partai(self.conn, sumber="gm", **k)["total"], lama)
         self.assertEqual(cari_partai(self.conn, sumber="gm")["total"], 3)   # 1, 3, 10
 
+    def test_saringan_eco_rentang_sama_dengan_like(self):
+        """Sejak 16 Okt 2026 saringan ECO memakai rentang (indeks), bukan LIKE.
+        Harus memilih partai yang sama untuk awalan 1-3 huruf, tanpa ikut
+        mencocokkan kode yang hanya MENGANDUNG awalan itu."""
+        t = sekarang()
+        for pid, eco in [(20, "B90"), (21, "B99"), (22, "B20"), (23, "A90"), (24, "E99"), (25, None)]:
+            self.conn.execute(
+                "INSERT INTO partai(id,putih_id,hitam_id,hasil,eco,pgn,sumber,hash_unik,diimpor_pada) "
+                "VALUES(?,1,2,'1-0',?,'x','twic',?,?)", (pid, eco, f"e{pid}", t))
+        self.conn.commit()
+        for awal, harap in [("B", {20, 21, 22}), ("B9", {20, 21}), ("b90", {20}),
+                            ("90", set()), ("E99", {24}), ("B9%", set()), ("C", set())]:
+            with self.subTest(awal=awal):
+                d = cari_partai(self.conn, eco=awal, per_halaman=100)
+                self.assertEqual({g["id"] for g in d["partai"]}, harap)
+                self.assertEqual(d["total"], len(harap))
+
     def test_posisi_awal_semua_partai(self):
         import chess
         from app.posisi import fen_kunci

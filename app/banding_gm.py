@@ -50,6 +50,7 @@ JENDELA_PLY = 30       # 15 langkah sendiri sesudah titik keluar
 MIN_PARTAI_SAYA = 3    # titik yang dicapai lebih jarang tidak ditampilkan: satu-dua partai = kebetulan
 SAMPEL_GM_ENGINE = 150  # partai GM teranalisis yang dibaca per titik
 CONTOH_GM = 3
+PARTAI_SAYA_MAKS = 30   # partai sendiri per posisi yang dikirim (kalah dulu, lalu terbaru)
 LANGKAH_GM_MAKS = 4
 FORMAT_VALID = ("bullet", "blitz", "rapid", "klasik", "tanpa")
 
@@ -124,6 +125,30 @@ def _kehilangan_jendela(conn, awal_per_partai: dict[int, tuple[int, str]]) -> di
             k[1] += hilang
             k[2] += klas in ("blunder", "mistake")
     return {pid: tuple(v) for pid, v in keluar.items()}
+
+
+def _kesalahan_pertama(conn, awal_per_partai: dict[int, tuple[int, str]]) -> dict[int, dict]:
+    """
+    partai_id -> blunder/mistake PERTAMA warna itu pada ply >= ply_awal (tanpa
+    batas jendela: yang dicari "di mana aku mulai salah sesudah keluar buku").
+    Partai teranalisis tanpa kesalahan sesudah titik itu -> {} ; partai yang
+    belum dianalisis tidak muncul sama sekali.
+    """
+    keluar: dict[int, dict] = {}
+    ids = list(awal_per_partai)
+    for i in range(0, len(ids), POTONGAN_ID):
+        potong = ids[i:i + POTONGAN_ID]
+        for pid, ply, nomor, warna, san, hilang, klas in conn.execute(
+                f"SELECT partai_id, ply, nomor_langkah, warna, san, kehilangan_cp, klasifikasi "
+                f"FROM analisis_langkah WHERE partai_id IN ({','.join('?' * len(potong))}) "
+                f"ORDER BY partai_id, ply", potong):
+            keluar.setdefault(pid, {})
+            awal, w = awal_per_partai[pid]
+            if keluar[pid] or warna != w or ply < awal or klas not in ("blunder", "mistake"):
+                continue
+            keluar[pid] = {"ply": ply, "nomor_langkah": nomor, "san": san,
+                           "klasifikasi": klas, "kehilangan_cp": hilang}
+    return keluar
 
 
 def _ringkas_engine(per_partai: list[tuple[int, int, int]]) -> dict:
@@ -250,6 +275,24 @@ def hitung(conn: sqlite3.Connection, pemain_id: list[int], lawan: str = "ketentu
         t["poin_hilang"] = round(-selisih * t["saya"]["partai"] / 100, 1)
         t["posisi_sehat"] = t["gm"]["skor"] is not None and t["gm"]["skor"] >= 40.0
     keluar.sort(key=lambda t: (not t["posisi_sehat"], -t["poin_hilang"]))
+
+    # Partaiku dari tiap posisi yang ditampilkan, dengan kesalahan pertamaku
+    # sesudah titik itu: bahan "rencana belajar" posisi lemah (16 Okt 2026).
+    # Kalah dulu, lalu terbaru — yang paling perlu dibuka ulang di atas.
+    awal_tampil = {pid: (ply, partai[pid]["warna"]) for t in keluar for pid, ply in titik[t["fen"]]}
+    pertama = _kesalahan_pertama(conn, awal_tampil)
+    for t in keluar:
+        daftar_partai = []
+        for pid, _ply in titik[t["fen"]]:
+            s = _skor(partai[pid]["hasil"], partai[pid]["warna"])
+            daftar_partai.append({
+                "partai_id": pid, "tanggal": partai[pid]["tanggal"], "lawan": partai[pid]["lawan"],
+                "hasil": {1.0: "menang", 0.5: "remis", 0.0: "kalah"}.get(s, "belum selesai"),
+                "dianalisis": pid in pertama, "kesalahan_pertama": pertama.get(pid) or None})
+        kalah = [x for x in daftar_partai if x["hasil"] == "kalah"]
+        lain = [x for x in daftar_partai if x["hasil"] != "kalah"]
+        urut = lambda xs: sorted(xs, key=lambda x: (x["tanggal"] or "", x["partai_id"]), reverse=True)
+        t["partai_saya"] = (urut(kalah) + urut(lain))[:PARTAI_SAYA_MAKS]
 
     return {
         "posisi": keluar,

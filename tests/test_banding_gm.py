@@ -129,6 +129,27 @@ class BandingGm(unittest.TestCase):
         self.assertEqual(e["langkah"], 2)                  # ply 8 dan 10 (Putih), dalam jendela
         self.assertEqual(e["rata_kehilangan"], 30.0)
 
+    def test_partai_saya_dan_kesalahan_pertama(self):
+        self.gm(3)
+        lanjut = ["Nf3", "Nc6", "Bg2", "Nb6", "O-O", "Be7"]
+        # ply 4 (sebelum titik) dan ply 9 (lawan) bukan "kesalahan pertamaku"; ply 10 ya.
+        kalah = self.partai(1, 2, "0-1", BUKU + lanjut, sumber="lichess-user", tanggal="2020.01.01",
+                            analisis={4: 500, 9: 900, 10: 400, 12: 350})
+        menang = self.partai(1, 2, "1-0", BUKU + lanjut, sumber="lichess-user", tanggal="2021.01.01",
+                             analisis={})
+        belum = self.partai(1, 2, "1/2-1/2", BUKU + lanjut, sumber="lichess-user", tanggal="2022.01.01")
+        r = hitung(self.conn, [1], lawan="semua", min_partai_gm=3, min_partai_saya=3)
+        daftar = r["posisi"][0]["partai_saya"]
+        self.assertEqual([x["partai_id"] for x in daftar], [kalah, belum, menang])   # kalah dulu, lalu terbaru
+        self.assertEqual(daftar[0]["hasil"], "kalah")
+        self.assertEqual(daftar[0]["kesalahan_pertama"]["ply"], 10)
+        self.assertEqual(daftar[0]["kesalahan_pertama"]["san"], "Bg2")     # ply 10 = 6.Bg2
+        self.assertEqual(daftar[0]["kesalahan_pertama"]["klasifikasi"], "blunder")
+        self.assertFalse(daftar[1]["dianalisis"])
+        self.assertIsNone(daftar[1]["kesalahan_pertama"])
+        self.assertTrue(daftar[2]["dianalisis"])                          # teranalisis, tanpa kesalahan
+        self.assertIsNone(daftar[2]["kesalahan_pertama"])
+
     def test_saringan_lawan(self):
         self.gm(3)
         self.conn.execute("INSERT INTO pemain(id,nama,nama_normal,dibuat_pada) VALUES(5,'Lemah','lemah',?)", (sekarang(),))

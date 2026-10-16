@@ -17,6 +17,7 @@ pembantu (middleware hanya_pembantu_dari_luar), dan itu pun wajib kode.
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
 
 from contextlib import asynccontextmanager
@@ -28,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from . import repositori
 from .analisis_db import ambil_analisis, statistik_analisis
 from .pola_taktik import tandai_motif
-from .db import PATH_DB, buat_skema, koneksi
+from .db import PATH_DB, koneksi, migrasi_saat_start
 
 AKAR = Path(__file__).resolve().parents[1]
 FOLDER_WEB = AKAR / "web"
@@ -45,7 +46,9 @@ async def daur_hidup(app: FastAPI):
     """
     conn = koneksi()
     try:
-        buat_skema(conn)
+        # Skema tidak lagi dibangun ulang tiap start: migrasi hanya kalau perlu dan di
+        # bawah kunci penulis (lihat db.migrasi_saat_start, 16 Okt 2026).
+        print(f"[skema] {migrasi_saat_start(conn)}", file=sys.stderr, flush=True)
     finally:
         conn.close()
     # Server dari pintasan berjalan tanpa jendela, dan Windows 11 lalu

@@ -180,15 +180,20 @@ class UjiSkema(DasarDB):
             ])
         self.conn.commit()
         self.conn.execute("ANALYZE sqlite_schema")    # muat ulang statistik ke perencana
-        for sumber, hasil in ((None, None), ("twic", None), ("gm", None),
-                              (None, "1/2-1/2"), ("gm", "1/2-1/2"), ("gm", "1-0")):
+        # eco=…: 16 Okt 2026, saringan ECO sebagai rentang berindeks membuat
+        # awalan lebar ('B', 62 ribu partai) diambil lalu diurutkan (1,6 s);
+        # daftar memakai `+g.eco`, hanya COUNT yang memakai indeks ECO.
+        for sumber, hasil, eco in ((None, None, None), ("twic", None, None), ("gm", None, None),
+                                   (None, "1/2-1/2", None), ("gm", "1/2-1/2", None),
+                                   ("gm", "1-0", None), (None, None, "B"), ("gm", None, "B"),
+                                   ("gm", "1/2-1/2", "E")):
             for urut in ("terbaru", "terlama"):
-                where, params = r._syarat(None, sumber, None, hasil)
+                where, params = r._syarat(None, sumber, eco, hasil)
                 sql = (f"SELECT {r.KOLOM_DAFTAR} {r.DARI_DAFTAR} {where} "
                        f"ORDER BY {r.URUTAN[urut]} LIMIT 25")
                 rencana = " | ".join(x[3] for x in self.conn.execute(
                     "EXPLAIN QUERY PLAN " + sql, params))
-                with self.subTest(sumber=sumber, hasil=hasil, urut=urut):
+                with self.subTest(sumber=sumber, hasil=hasil, eco=eco, urut=urut):
                     self.assertNotIn("TEMP B-TREE", rencana)
                     self.assertIn("tanggal_urut", rencana)
 
@@ -253,6 +258,21 @@ class UjiPemain(DasarDB):
 
 
 class UjiPartai(DasarDB):
+    def test_eco_harus_huruf_besar(self):
+        """v14: saringan ECO memakai rentang (peka huruf), jadi 'b90' akan
+        diam-diam hilang dari saringan B90. Database yang menolak."""
+        a, b = self.pemain("A"), self.pemain("B")
+        self.partai(a, b, "h-eco")
+        pid = self.conn.execute("SELECT id FROM partai WHERE hash_unik = 'h-eco'").fetchone()[0]
+        self.conn.execute("UPDATE partai SET eco = 'B90' WHERE id = ?", (pid,))   # sah
+        self.conn.execute("UPDATE partai SET eco = NULL WHERE id = ?", (pid,))    # tak diketahui sah
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("UPDATE partai SET eco = 'b90' WHERE id = ?", (pid,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute(
+                "INSERT INTO partai(putih_id, hitam_id, hasil, eco, pgn, sumber, hash_unik, "
+                "diimpor_pada) VALUES (?,?,'*','c42','x','uji','h-eco2',?)", (a, b, sekarang()))
+
     def test_partai_menunjuk_pemain_tidak_ada_ditolak(self):
         with self.assertRaises(sqlite3.IntegrityError):
             self.partai(999, 998, "h1")

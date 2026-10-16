@@ -79,6 +79,12 @@
       gambarIkhtisar(d.ringkasan);
       gambarDaftar(d);
       gambarKeluarAwal(d.ringkasan);
+      /* Kait uji tanpa mouse: ?uji_buka=1 membuka rincian baris pertama
+         (dump-dom peramban headless tidak bisa mengklik). */
+      if (q.get("uji_buka")) {
+        var baris1 = el.daftar.querySelector("tbody tr");
+        if (baris1) baris1.click();
+      }
     }).catch(function (e) { if (ke === permintaanKe) { galat(e.message); el.status.textContent = ""; } });
   }
 
@@ -230,7 +236,52 @@
       kotak.appendChild(kContoh);
 
       wadah.appendChild(kotak);
+      wadah.appendChild(rencanaSaya(p));
     }).catch(function (e) { wadah.textContent = e.message; });
+  }
+
+  /* Rencana belajar posisi ini dari sisi partai sendiri (16 Okt 2026): partai
+     yang melewati posisi ini (kalah dulu) dengan kesalahan pertamamu
+     sesudahnya, dan tautan ke Latihan yang hanya berisi kesalahan itu. */
+  var TAMPIL_PARTAI_SAYA = 10;
+  function rencanaSaya(p) {
+    var w = buat("div");
+    w.style.padding = "4px 4px 10px";
+    var judul = buat("div", null, "");
+    judul.appendChild(buat("strong", null, "Partaimu dari posisi ini"));
+    var adaKesalahan = (p.partai_saya || []).some(function (x) { return x.kesalahan_pertama; });
+    if (adaKesalahan) {
+      var q = new URLSearchParams();
+      q.set("akun", el.akun.value);
+      q.set("lawan", el.lawan.value);
+      if (el.format.value !== "semua") q.set("format", el.format.value);
+      q.set("fen", fenLengkap(p.fen));
+      q.set("ply_dari", p.ply);
+      q.set("warna", p.warna);
+      q.set("nama", "sesudah " + jalurTeks(p.jalur).split(" ").slice(-4).join(" "));
+      judul.appendChild(teks("  "));
+      judul.appendChild(tautan("/static/latihan.html?" + q.toString(), "latih kesalahanmu dari posisi ini →",
+        "Soal Latihan dari blunder/kesalahanmu sesudah posisi ini saja"));
+    }
+    w.appendChild(judul);
+    var daftar = p.partai_saya || [];
+    daftar.slice(0, TAMPIL_PARTAI_SAYA).forEach(function (x) {
+      var baris = buat("div", "mono kecil");
+      baris.appendChild(buat("span", x.hasil === "kalah" ? "klas-blunder" : x.hasil === "menang" ? "klas-terbaik" : "redup",
+        x.hasil));
+      baris.appendChild(teks(" · "));
+      baris.appendChild(tautan("/partai/" + x.partai_id, (x.tanggal || "?") + " vs " + (x.lawan || "?")));
+      var k = x.kesalahan_pertama;
+      baris.appendChild(teks(" · " + (k ? "salah pertama " + k.nomor_langkah + (p.warna === "putih" ? ". " : "… ") + k.san +
+        (k.klasifikasi === "blunder" ? "??" : "?") + " (−" + k.kehilangan_cp + " cp)"
+        : x.dianalisis ? "tanpa blunder/kesalahan sesudahnya" : "belum dianalisis")));
+      w.appendChild(baris);
+    });
+    if (daftar.length > TAMPIL_PARTAI_SAYA) {
+      w.appendChild(buat("div", "kecil redup", "… dan " + (daftar.length - TAMPIL_PARTAI_SAYA) + " partai lain (" +
+        p.saya.partai + " total; paling banyak 30 dikirim, kalah dulu)"));
+    }
+    return w;
   }
 
   function gambarKeluarAwal(r) {

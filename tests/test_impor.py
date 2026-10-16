@@ -65,6 +65,18 @@ class UjiDedup(DasarImpor):
         self.assertEqual(self.jumlah("partai"), 0)
 
 
+class UjiEcoHurufBesar(DasarImpor):
+    def test_eco_kecil_dari_pgn_disimpan_huruf_besar(self):
+        """PGN boleh menulis [ECO "b90"]; database v14 menolak huruf kecil,
+        jadi impor harus menyeragamkannya, bukan gagal."""
+        impor_teks(self.conn, pgn(hasil="1-0", tambahan='[ECO "b90"]'), "file")
+        self.assertEqual(self.conn.execute("SELECT eco FROM partai").fetchone()[0], "B90")
+
+    def test_eco_tidak_diketahui_tetap_null(self):
+        impor_teks(self.conn, pgn(hasil="1-0", tambahan='[ECO "?"]'), "file")
+        self.assertIsNone(self.conn.execute("SELECT eco FROM partai").fetchone()[0])
+
+
 class UjiEloNol(DasarImpor):
     """Audit 27 Sep: siaran menulis Elo "0" untuk pemain tanpa rating; 51 partai
     tersimpan 0 dan merusak saringan serta rata-rata Elo."""

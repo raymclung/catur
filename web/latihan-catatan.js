@@ -58,7 +58,13 @@ window.LatihanCatatan = (function () {
 
   /* Soal pembukaan dikunci per POSISI, bukan per partai: posisi yang sama
      dicapai di puluhan partai dan cukup satu catatan. */
-  function kunciSoal(s) { return s.jenis === "pembukaan" ? "buka:" + s.fen : s.partai_id + ":" + s.ply; }
+  /* Soal "hukum kesalahanmu" (16 Okt 2026) diberi awalan sendiri: posisinya
+     ply+1 dari kesalahan, dan tanpa awalan bisa bertabrakan dengan soal
+     kesalahan lain di ply itu. Server menyimpannya di mode "kesalahan". */
+  function kunciSoal(s) {
+    if (s.jenis === "pembukaan") return "buka:" + s.fen;
+    return (s.jenis === "hukum" ? "hukum:" : "") + s.partai_id + ":" + s.ply;
+  }
 
   /* Babak kesalahan dari nomor langkah — kasar tapi jujur, jadi labelnya
      menyebut nomor langkah, bukan "pembukaan/tengah/akhir". */

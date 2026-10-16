@@ -214,6 +214,16 @@
         l.title = "Soal latihan dari kesalahan dengan pola ini saja";
         l.appendChild(teks("latih →"));
         tdL.appendChild(l);
+        /* Arah sebaliknya (16 Okt 2026): posisi SESUDAH kesalahanmu, pegang
+           lawan, temukan cara menghukumnya — hanya untuk sisi "dibiarkan". */
+        if (m.membiarkan) {
+          tdL.appendChild(teks(" · "));
+          var h = document.createElement("a");
+          h.href = l.href + "&mode=hukum";
+          h.title = "Posisi sesudah kesalahanmu: pegang lawan dan temukan cara menghukumnya";
+          h.appendChild(teks("hukum →"));
+          tdL.appendChild(h);
+        }
       }
       tr.appendChild(tdL);
       tb.appendChild(tr);

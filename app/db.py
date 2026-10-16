@@ -36,13 +36,14 @@ FOLDER_DATA = PATH_DB.parent
 # Dinaikkan tiap kali skema berubah, supaya nanti bisa dideteksi kalau ada
 # database lama yang perlu dimigrasi. Disimpan lewat PRAGMA user_version
 # bawaan SQLite, jadi tidak perlu tabel tambahan.
-VERSI_SKEMA = 13  # v2 analisis; v3 sumber_impor; v4 posisi; v5 posisi_tersimpan;
+VERSI_SKEMA = 14  # v2 analisis; v3 sumber_impor; v4 posisi; v5 posisi_tersimpan;
                   # v6 akun_pribadi + format; v7 indeks penutup posisi;
                   # v8 indeks (sumber, tanggal) untuk daftar partai;
                   # v9 latihan_jawaban; v10 pemain.jenis (mesin/konsultasi);
                   # v11 CHECK akun_pribadi untuk database hasil migrasi (trigger);
                   # v12 indeks penutup (sumber, hasil, jumlah_langkah) halaman Mesin;
-                  # v13 indeks ekspresi REPLACE(tanggal) untuk urutan daftar partai
+                  # v13 indeks ekspresi REPLACE(tanggal) untuk urutan daftar partai;
+                  # v14 trigger: partai.eco harus huruf besar
 
 
 SKEMA = """
@@ -415,8 +416,53 @@ def buat_skema(conn: sqlite3.Connection) -> None:
             f"CREATE TRIGGER IF NOT EXISTS {nama} BEFORE {kapan} ON pemain "
             "WHEN NEW.akun_pribadi NOT IN (0, 1) "
             "BEGIN SELECT RAISE(ABORT, 'CHECK constraint failed: akun_pribadi'); END")
+    # v14: kode ECO harus huruf besar. Saringan ECO memakai rentang
+    # `eco >= ? AND eco < ?` (indeks), yang — beda dari LIKE — membedakan
+    # huruf besar-kecil; 'b90' akan diam-diam hilang dari saringan B90.
+    # Impor menyeragamkannya (impor_bantu.eco_baku); trigger ini memastikan
+    # jalur tulis mana pun yang lupa ditolak keras, bukan tersimpan diam-diam.
+    for kapan in ("INSERT", "UPDATE OF eco"):
+        nama = "cek_eco_" + kapan.split()[0].lower()
+        conn.execute(
+            f"CREATE TRIGGER IF NOT EXISTS {nama} BEFORE {kapan} ON partai "
+            "WHEN NEW.eco IS NOT NULL AND NEW.eco <> UPPER(NEW.eco) "
+            "BEGIN SELECT RAISE(ABORT, 'CHECK constraint failed: eco huruf besar'); END")
     conn.execute(f"PRAGMA user_version = {VERSI_SKEMA}")
     conn.commit()
+
+
+def migrasi_saat_start(conn: sqlite3.Connection, kunci=None) -> str:
+    """Migrasi skema dari start server — hanya kalau perlu, dan hanya di
+    bawah kunci penulis. Kembalikan keterangan untuk log.
+
+    Kenapa (16 Okt 2026): server dulu menjalankan buat_skema() tiap start.
+    Sesi lain me-restart server 26 detik sesudah app/db.py v14 disimpan
+    (belum di-commit), dan trigger v14 terpasang di catur.db tanpa kunci
+    penulis — bisa bertabrakan dengan impor atau indeks yang sedang jalan.
+
+    - versi database sudah = VERSI_SKEMA: skema tidak disentuh sama sekali.
+    - perlu migrasi dan kunci bebas: migrasi di bawah kunci.
+    - kunci dipegang penulis lain: server TETAP menyala dengan skema lama
+      (perubahan skema di proyek ini aditif: indeks, trigger, kolom), dan
+      migrasi ditunda ke start berikutnya atau `python -m app.db`.
+
+    Batas yang diterima: kode yang belum di-commit tetap bisa memigrasi
+    kalau kuncinya bebas. Itu urusan koordinasi (SESI.md), bukan kunci.
+    """
+    from .kunci_penulis import KunciPenulis, KunciTerpakai   # noqa: PLC0415
+
+    versi = versi_skema(conn)
+    if versi >= VERSI_SKEMA:
+        return f"skema v{versi} terkini, tidak disentuh"
+    kunci = kunci or KunciPenulis(f"server: migrasi skema v{versi} -> v{VERSI_SKEMA}")
+    try:
+        with kunci:
+            buat_skema(conn)
+    except KunciTerpakai as e:
+        pemegang = str(e).split("Pemegang kunci:")[-1].split("\n")[0].strip()
+        return (f"MIGRASI DITUNDA: skema v{versi}, kode v{VERSI_SKEMA}; kunci penulis "
+                f"dipegang {pemegang}. Server tetap jalan dengan skema lama.")
+    return f"skema dimigrasi v{versi} -> v{VERSI_SKEMA}"
 
 
 def versi_skema(conn: sqlite3.Connection) -> int:
