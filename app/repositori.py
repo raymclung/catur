@@ -88,7 +88,8 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
             warna: str | None = None, eco_dari: str | None = None,
             eco_sampai: str | None = None,
             fen_kunci: str | None = None,
-            format_: str | None = None) -> tuple[str, list]:
+            format_: str | None = None,
+            dasar_gm: bool = False) -> tuple[str, list]:
     """
     Bangun bagian WHERE beserta parameternya.
 
@@ -118,8 +119,13 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
         # baris di B-tree sementara (10 Okt 2026: 1,9 s -> 0,00 s, id
         # halaman 1 dan 200 sama persis). `+` hanya mematikan indeks untuk
         # kolom ini; hasilnya tidak berubah.
-        syarat.append(f"+g.sumber IN ({','.join('?' * len(SUMBER_GM))})")
-        syarat.append(SYARAT_ANTAR_MANUSIA)
+        if dasar_gm:
+            # Untuk hitungan total (_total_gm): sumber lewat indeks, syarat
+            # antar-manusia dikurangkan terpisah.
+            syarat.append(f"g.sumber IN ({','.join('?' * len(SUMBER_GM))})")
+        else:
+            syarat.append(f"+g.sumber IN ({','.join('?' * len(SUMBER_GM))})")
+            syarat.append(SYARAT_ANTAR_MANUSIA)
         params += list(SUMBER_GM)
     elif sumber:
         syarat.append("g.sumber = ?")
@@ -134,7 +140,12 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
         # hanya disembunyikan di tampilan lewat saringan ini.
         syarat.append("g.hasil IN ('1-0', '0-1')")
     elif hasil:
-        syarat.append("g.hasil = ?")
+        # `+` sengaja: satu nilai hasil = sepertiga partai, jadi menyusuri
+        # indeks tanggal lalu berhenti di 25 baris jauh lebih cepat daripada
+        # skip-scan idx_partai_bisa_dipilih atas ±110 ribu partai lalu
+        # mengurutkannya (16 Okt 2026: gm + remis 1,08 s -> 0,00 s, tanpa
+        # saringan lain 0,56 s -> 0,00 s; id daftar sama persis).
+        syarat.append("+g.hasil = ?")
         params.append(hasil)
 
     if gelar:
@@ -178,6 +189,30 @@ def _syarat(cari: str | None, sumber: str | None, eco: str | None,
         params.append(format_)
 
     return ("WHERE " + " AND ".join(syarat) if syarat else ""), params
+
+
+# Partai yang melibatkan pemain bukan-manusia (mesin, konsultasi): pemain.jenis
+# tidak NULL. Hanya 33 pemain (10 Okt 2026), jadi dicari lewat
+# idx_partai_putih/idx_partai_hitam, bukan diperiksa per partai.
+_BUKAN_MANUSIA = ("(g.putih_id IN (SELECT id FROM pemain WHERE jenis IS NOT NULL) "
+                  "OR g.hitam_id IN (SELECT id FROM pemain WHERE jenis IS NOT NULL))")
+
+
+def _total_gm(conn: sqlite3.Connection, dasar: str, params: list) -> int:
+    """Jumlah partai GM = semua partai GM dasar - yang melibatkan bukan-manusia.
+
+    Sama persis dengan COUNT(*) memakai SYARAT_ANTAR_MANUSIA (dijaga
+    tests/test_repositori.py), tapi kedua bagiannya dilayani indeks: 0,48 s
+    -> 0,015 s pada 263 ribu partai GM (10 Okt 2026). Dulu NOT EXISTS ke
+    tabel pemain dievaluasi untuk tiap partai, dan total itu dihitung di
+    tiap halaman daftar "partai GM".
+    """
+    sambung = " AND " if dasar else "WHERE "
+    return conn.execute(
+        f"SELECT (SELECT COUNT(*) FROM partai g {dasar}) - "
+        f"(SELECT COUNT(*) FROM partai g {dasar}{sambung}{_BUKAN_MANUSIA})",
+        params + params,
+    ).fetchone()[0]
 
 
 def _butuh_join(cari: str | None, gelar: str | None,
@@ -237,6 +272,13 @@ def cari_partai(
 
     if _butuh_join(cari, gelar, dianalisis):
         total = conn.execute(f"SELECT COUNT(*) {DARI_DAFTAR} {where}", params).fetchone()[0]
+    elif sumber == "gm" and not fen_kunci:
+        # Dengan fen, subkueri posisi ikut dihitung dua kali di bentuk selisih
+        # dan malah lebih lambat (0,41 -> 0,59 s); bentuk lama dipakai.
+        dasar, p_dasar = _syarat(cari, sumber, eco, hasil, gelar, dianalisis, pemain_id,
+                                 warna, eco_dari, eco_sampai, fen_kunci, format_,
+                                 dasar_gm=True)
+        total = _total_gm(conn, dasar, p_dasar)
     else:
         total = conn.execute(f"SELECT COUNT(*) FROM partai g {where}", params).fetchone()[0]
 

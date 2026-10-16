@@ -155,14 +155,40 @@ class UjiSkema(DasarDB):
         v13 tidak lagi sama persis — SQLite tidak memberi tahu, ia diam-diam
         kembali ke B-tree sementara."""
         from app import repositori as r
-        for sumber in (None, "twic", "gm"):
+        # hasil=…: 16 Okt 2026, satu nilai hasil membuat perencana memakai
+        # skip-scan idx_partai_bisa_dipilih + B-tree sementara (gm + remis
+        # 1,08 s) sampai kolomnya diberi `+` di _syarat.
+        #
+        # Statistik perencana dari catur.db asli (ANALYZE 10 Okt 2026). Tanpa
+        # ini database uji kosong dan perencana kebetulan memilih indeks yang
+        # benar — kasus `hasil` lolos walau perbaikannya dibuang (diuji).
+        self.conn.execute("ANALYZE")
+        self.conn.execute("DELETE FROM sqlite_stat1 WHERE tbl = 'partai'")
+        self.conn.executemany(
+            "INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES ('partai', ?, ?)", [
+                ("idx_partai_bisa_dipilih", "274978 54996 16176 152"),
+                ("idx_partai_eco", "274978 549"),
+                ("idx_partai_format", "274978 54996"),
+                ("idx_partai_hitam", "274978 20"),
+                ("idx_partai_putih", "274978 21"),
+                ("idx_partai_sumber_tanggal", "274978 54996 20 1"),
+                ("idx_partai_sumber_tanggal_urut", "274978 54996 20 1"),
+                ("idx_partai_tanggal", "274978 28"),
+                ("idx_partai_tanggal_urut", "274978 28 1"),
+                ("idx_partai_turnamen", "274978 23"),
+                ("sqlite_autoindex_partai_1", "274978 1"),
+            ])
+        self.conn.commit()
+        self.conn.execute("ANALYZE sqlite_schema")    # muat ulang statistik ke perencana
+        for sumber, hasil in ((None, None), ("twic", None), ("gm", None),
+                              (None, "1/2-1/2"), ("gm", "1/2-1/2"), ("gm", "1-0")):
             for urut in ("terbaru", "terlama"):
-                where, params = r._syarat(None, sumber, None, None)
+                where, params = r._syarat(None, sumber, None, hasil)
                 sql = (f"SELECT {r.KOLOM_DAFTAR} {r.DARI_DAFTAR} {where} "
                        f"ORDER BY {r.URUTAN[urut]} LIMIT 25")
                 rencana = " | ".join(x[3] for x in self.conn.execute(
                     "EXPLAIN QUERY PLAN " + sql, params))
-                with self.subTest(sumber=sumber, urut=urut):
+                with self.subTest(sumber=sumber, hasil=hasil, urut=urut):
                     self.assertNotIn("TEMP B-TREE", rencana)
                     self.assertIn("tanggal_urut", rencana)
 

@@ -197,6 +197,12 @@ def jalankan_anak(perintah: list[str], **kwargs):
     import subprocess
 
     kwargs.setdefault("env", lingkungan_anak())
+    # Tanpa jendela: perbarui.py dari tombol "Perbarui sekarang" berjalan
+    # DETACHED (tanpa konsol), dan anak konsol dari proses tanpa konsol diberi
+    # konsol BARU oleh Windows — jendela Windows Terminal hitam kosong muncul
+    # tiap tahap (Ray, 16 Okt 2026). Menutupnya mematikan tahap itu. Keluaran
+    # anak sudah lewat pipa, jadi konsol memang tidak dibutuhkan.
+    kwargs.setdefault("creationflags", _tanpa_jendela())
     masukan = kwargs.pop("input", None)
     timeout = kwargs.pop("timeout", None)
     with subprocess.Popen(perintah, **kwargs) as proses:

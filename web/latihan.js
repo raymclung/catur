@@ -97,10 +97,13 @@
       eco_sampai: /^[A-E]\d\d$/.test(q.get("eco_sampai") || "") ? q.get("eco_sampai") : null,
       warna: /^(putih|hitam)$/.test(q.get("warna") || "") ? q.get("warna") : null,
       fase: /^(pembukaan|tengah|akhir)$/.test(q.get("fase") || "") ? q.get("fase") : null,
+      /* ?motif=garpu dari kartu "Pola taktik" halaman Kelemahan (16 Okt 2026):
+         hanya kesalahan yang motif utamanya itu (field `motif` dari server). */
+      motif: /^[a-z_]+$/.test(q.get("motif") || "") ? q.get("motif") : null,
       nama: q.get("nama") || null
     };
     if (!(s.eco_dari && s.eco_sampai)) { s.eco_dari = s.eco_sampai = null; }
-    return (s.eco_dari || s.warna || s.fase) ? s : null;
+    return (s.eco_dari || s.warna || s.fase || s.motif) ? s : null;
   })();
   var FASE_PLY = [["pembukaan", 0, 24], ["tengah", 24, 80], ["akhir", 80, Infinity]];
   function faseDariPly(ply) {
@@ -134,6 +137,7 @@
     if (s.nama || s.eco_dari) bagian.push(s.nama || (s.eco_dari + "–" + s.eco_sampai));
     if (s.warna) bagian.push(s.warna === "putih" ? "Putih" : "Hitam");
     if (s.fase) bagian.push("fase " + s.fase);
+    if (s.motif) bagian.push("pola " + (s.motifNama || s.motif.replace(/_/g, " ")));
     return bagian.join(" · ");
   }
 
@@ -263,6 +267,10 @@
       if (warnaDiambil && l.warna !== warnaDiambil) return;
       if (jenis.indexOf(l.klasifikasi) < 0) return;
       if (saringKesalahan && saringKesalahan.fase && faseDariPly(l.ply) !== saringKesalahan.fase) return;
+      if (saringKesalahan && saringKesalahan.motif) {
+        if (!l.motif || l.motif.utama !== saringKesalahan.motif) return;
+        saringKesalahan.motifNama = l.motif.nama;
+      }
       if (!l.langkah_terbaik_uci || l.langkah_terbaik_uci === l.uci) return;
       if (l.eval_sebelum_cp !== null && l.eval_sebelum_cp !== undefined &&
           l.eval_sebelum_cp < BATAS_MIN_SKOR) {
@@ -279,7 +287,7 @@
       soalSemua.push({
         partai_id: g.id, ply: l.ply, warna: l.warna, san: l.san,
         terbaik_uci: l.langkah_terbaik_uci, terbaik_san: l.langkah_terbaik_san,
-        variasi: l.variasi_terbaik || [], klasifikasi: l.klasifikasi,
+        variasi: l.variasi_terbaik || [], klasifikasi: l.klasifikasi, motif: l.motif || null,
         kehilangan: l.kehilangan_cp,
         sebelum: l.eval_sebelum_cp, sesudah: l.eval_sesudah_cp,
         format: AlatCatur.formatPartai(g), kontrol: AlatCatur.kontrolPartai(g),
@@ -536,6 +544,15 @@
       if (dari === "imbang" && ke === "kalah") el2.appendChild(buat("span", "catatan", "Fatal: satu langkah dari imbang ke kalah"));
       else if (fatal) el2.appendChild(buat("span", "catatan", "Fatal: keunggulan yang hilang sebanyak ini"));
       el.jawab.appendChild(el2);
+    }
+    /* Pola di balik kesalahan aslinya (app/pola_taktik.py). Ditampilkan di
+       kartu JAWABAN, bukan di soal: menyebut "garpu" sebelum dijawab sama
+       dengan memberi petunjuk. */
+    if (soal.motif) {
+      el.jawab.appendChild(buat("div", "kecil", "Pola: " + soal.motif.nama +
+        (soal.motif.utama === "posisional" || soal.motif.utama === "tanpa_data" ? ""
+          : soal.motif.sisi === "melewatkan" ? " — yang terlewat di langkah terbaik"
+          : " — yang dibiarkan langkah asli")));
     }
     el.kartuJawab.classList.toggle("jawab-benar", cocok);
     el.kartuJawab.classList.toggle("jawab-salah", !cocok);

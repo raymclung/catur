@@ -188,3 +188,34 @@ else:
 
     def test_jalankan_anak_ikut_mati(self):
         self.assertFalse(self._anak_hidup_setelah_induk_dibunuh("baru"))
+
+
+@unittest.skipUnless(os.name == "nt", "khusus Windows")
+class AnakTanpaJendela(unittest.TestCase):
+    """
+    16 Okt 2026: tombol "Perbarui sekarang" menjalankan perbarui.py DETACHED
+    (tanpa konsol); tiap tahapnya (impor_broadcast, indeks_posisi) diberi
+    konsol baru oleh Windows -> jendela Windows Terminal hitam kosong. Ray
+    menutupnya, dan tahap broadcast mati dengan 0xC000013A. Anak dari
+    jalankan_anak() tidak boleh punya jendela konsol.
+    """
+
+    INDUK = r"""
+import sys
+sys.path.insert(0, sys.argv[1])
+from app.kunci_penulis import jalankan_anak
+anak = [sys.executable, "-c",
+        "import ctypes, sys; open(sys.argv[1], 'w').write(str(ctypes.windll.kernel32.GetConsoleWindow()))",
+        sys.argv[2]]
+jalankan_anak(anak)
+"""
+
+    def test_anak_dari_induk_tanpa_konsol_tidak_membuka_jendela(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hasil = Path(tmp) / "jendela.txt"
+            induk = subprocess.Popen(
+                [sys.executable, "-c", self.INDUK, str(AKAR), str(hasil)],
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            induk.wait(timeout=60)
+            self.assertEqual(hasil.read_text(), "0", "anak mendapat jendela konsol")

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banding — McLung ChessBase</title>
+<link rel="stylesheet" href="/static/gaya.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/favicon-180.png">
+</head>
+<body>
+
+<header>
+  <div class="bungkus">
+    <h1><a href="/" title="McLung ChessBase"><img class="logo" src="/static/img/logo.png" alt="McLung ChessBase"></a></h1>
+  </div>
+  <nav class="nav-utama" aria-label="Navigasi utama"><div class="bungkus">
+    <a href="/static/beranda.html">Beranda</a>
+    <a href="/">Partai</a>
+    <a href="/jelajah">Jelajah</a>
+    <a href="/static/banding.html" class="aktif" title="Bandingkan dua pemain berdampingan">Banding</a>
+    <a href="/static/analisis.html">Analisis</a>
+    <a href="/static/tersimpan.html">Tersimpan</a>
+    <a href="/static/impor.html">Impor</a>
+    <a href="/static/mesin.html" title="Jalankan analisis engine untuk banyak partai">Mesin</a>
+    <span class="pemisah" aria-hidden="true"></span>
+    <a href="/ringkasan">Ringkasan</a>
+    <a href="/static/latihan.html">Latihan</a>
+    <a href="/static/tebak.html" title="Main sebagai GM di partai aslinya dan tebak langkahnya">Tebak GM</a>
+    <a href="/static/mentor.html" title="Kurikulum 4 minggu dari partai satu GM">Mentor</a>
+    <a href="/static/kekalahan.html">Kekalahan</a>
+    <a href="/static/kelemahan.html">Kelemahan</a>
+    <a href="/static/posisi-gm.html" title="Hasilmu vs GM dari posisi pembukaan yang sama">vs GM</a>
+    <a href="/static/repertoire.html">Repertoire</a>
+    <a href="/static/kemajuan.html">Kemajuan</a>
+    <a href="/tanya" title="Tanya database pakai bahasa Indonesia">Tanya</a>
+  </div></nav>
+</header>
+
+<main>
+  <div id="galat" class="galat" hidden></div>
+
+  <div class="saring">
+    <label>Pemain A
+      <input id="cari-a" list="daftar-a" placeholder="ketik nama, mis. Carlsen" autocomplete="off" size="28">
+      <datalist id="daftar-a"></datalist>
+    </label>
+    <button id="tukar" type="button" title="Tukar A dan B">⇄</button>
+    <label>Pemain B
+      <input id="cari-b" list="daftar-b" placeholder="ketik nama, mis. Caruana" autocomplete="off" size="28">
+      <datalist id="daftar-b"></datalist>
+    </label>
+    <label>Format
+      <select id="format" title="Partai TWIC tidak punya kontrol waktu, jadi sebagian besar partai GM berformat 'tanpa'">
+        <option value="semua" selected>semua</option>
+        <option value="klasik">klasik</option>
+        <option value="rapid">rapid</option>
+        <option value="blitz">blitz</option>
+        <option value="bullet">bullet</option>
+        <option value="tanpa">tanpa kontrol waktu</option>
+      </select>
+    </label>
+    <span class="kecil redup" id="status"></span>
+  </div>
+
+  <div class="kartu" id="petunjuk">
+    <div class="kecil redup" style="padding:14px">Pilih dua pemain untuk dibandingkan: gaya bermain,
+      angka engine, pembukaan, dan partai di antara keduanya.</div>
+  </div>
+
+  <div class="kartu" id="ringkasan" hidden></div>
+  <div class="papan-tata" style="margin-top:16px; grid-template-columns: 1fr 1fr" id="pembukaan" hidden>
+    <div class="kartu" id="pembukaan-putih"></div>
+    <div class="kartu" id="pembukaan-hitam"></div>
+  </div>
+  <div class="kartu" style="margin-top:16px" id="h2h" hidden></div>
+</main>
+
+<script src="/static/banding.js"></script>
+</body>
+</html>

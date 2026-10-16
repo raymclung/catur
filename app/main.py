@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import repositori
 from .analisis_db import ambil_analisis, statistik_analisis
+from .pola_taktik import tandai_motif
 from .db import PATH_DB, buat_skema, koneksi
 
 AKAR = Path(__file__).resolve().parents[1]
@@ -156,7 +157,8 @@ def api_analisis_partai(partai_id: int, conn: sqlite3.Connection = Depends(db)):
     beserta perintah CLI-nya. Evaluasi satu posisi secara langsung ada di
     /api/evaluasi (ARSITEKTUR.md, Phase 5).
     """
-    if repositori.ambil_partai(conn, partai_id) is None:
+    partai = repositori.ambil_partai(conn, partai_id)
+    if partai is None:
         raise HTTPException(status_code=404, detail=f"Partai {partai_id} tidak ada")
     hasil = ambil_analisis(conn, partai_id)
     if hasil is None:
@@ -167,7 +169,9 @@ def api_analisis_partai(partai_id: int, conn: sqlite3.Connection = Depends(db)):
                 "perintah": f"python analisis_partai.py --id {partai_id}",
             },
         )
-    return hasil
+    # Motif taktik tiap blunder/mistake (garpu, pin, ...) dihitung dari garis
+    # engine yang sudah tersimpan, tanpa engine. Dipakai saringan Latihan.
+    return tandai_motif(hasil, partai.get("pgn"))
 
 
 @aplikasi.get("/api/ringkasan", summary="Ringkasan lintas partai satu/beberapa pemain")
@@ -313,6 +317,26 @@ aplikasi.include_router(router_analisa)
 from .sebab_kalah import router as router_kekalahan   # noqa: E402
 
 aplikasi.include_router(router_kekalahan)
+
+# Motif taktik kesalahan sendiri (pustaka pola, RENCANA §14).
+from .pola_taktik import router as router_pola   # noqa: E402
+
+aplikasi.include_router(router_pola)
+
+# Bandingkan dua pemain berdampingan (RENCANA §10).
+from .banding_pemain import router as router_banding   # noqa: E402
+
+aplikasi.include_router(router_banding)
+
+# Kamu vs GM dari posisi yang sama (titik keluar buku dan hasilnya).
+from .banding_gm import router as router_banding_gm   # noqa: E402
+
+aplikasi.include_router(router_banding_gm)
+
+# Mentor: kurikulum 4 minggu dari partai satu GM (RENCANA §16).
+from .mentor import router as router_mentor   # noqa: E402
+
+aplikasi.include_router(router_mentor)
 
 # Soal latihan pembukaan: posisi repertoire tempat langkah sendiri jarang
 # dimainkan GM. Dihitung di server karena butuh ribuan kueri posisi.
